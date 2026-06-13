@@ -1,0 +1,91 @@
+name: Harnext Review Fix
+# Fix phase of the review loop. Runs the fixer agent against the most
+# recent review feedback, then re-dispatches the review workflow to
+# re-evaluate. Dispatch-only — never fires from a labeled event.
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'PR number to run the fix stage on'
+        required: true
+        type: string
+
+jobs:
+  claude:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
+    concurrency:
+      group: harnext-review-fix-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "Štefan Moravík"
+          git config --global user.email "stevko.moravik@gmail.com"
+
+      - name: Run Claude Code
+        id: claude
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the fix agent. The latest review on PR ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} requested changes.
+
+            1. `gh pr checkout ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}` and `git pull`.
+            2. Read the review thread: `gh api repos/:owner/:repo/pulls/${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}/reviews` and `gh api repos/:owner/:repo/pulls/${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}/comments`. Address every blocking item.
+            3. Edit only what the review demands. Do not refactor, rename, or add unrelated changes. Do not modify protected files (`.github/workflows/**`, `harness.config.json`, `backend/requirements.txt`, `frontend/package-lock.json`).
+            4. CI failures listed in the review are fix targets — address the underlying code, never silence them. Forbidden: `# noqa`, `# type: ignore`, `eslint-disable`, `@ts-ignore`, `@ts-expect-error`, modifying CI config, lowering gate thresholds.
+            5. Re-run gates locally before pushing:
+               - `cd backend && ruff check . && ruff format --check . && pytest`
+               - `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run && npm run build`
+            6. Git identity is set at the workflow level (Štefan Moravík) — do NOT run `git config user.name/user.email` yourself. Use conventional commit prefixes (`fix:`, `refactor:`, `test:`, etc.); keep messages short, lowercase, casual. One logical change per commit. Push to the same branch.
+            7. Reply once on the PR (`gh pr comment ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`) with a checklist mapping each review item → commit SHA. Do not resolve threads or re-request review — the human does that.
+          claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 500 --allowedTools "Read,Glob,Grep,Bash,Edit,Write"'
+          allowed_bots: 'github-actions'
+      - name: Dismiss prior change-request review
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          rid=$(gh api "repos/${{ github.repository }}/pulls/$NUM/reviews" \
+                  --jq '[.[] | select(.state=="CHANGES_REQUESTED" and .user.login=="github-actions[bot]")] | last | .id')
+          if [ -n "$rid" ] && [ "$rid" != "null" ]; then
+            gh api -X PUT "repos/${{ github.repository }}/pulls/$NUM/reviews/$rid/dismissals" \
+              -f message="Auto-dismissed: fixer addressed feedback in follow-up commits." \
+              -f event="DISMISS"
+          fi
+      - name: Re-dispatch review on success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          gh workflow run "harnext-review.yml" --field issue_number="$NUM"
+      - name: Park on needs-judgment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          iter=$(gh api "repos/${{ github.repository }}/issues/$NUM/labels" --jq '.[].name' | \
+                grep -oE '^harnext:review-iter-[0-9]+$' | head -n1 || echo "")
+          if [ -n "$iter" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/$iter" || true
+          fi
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review" || true
+          gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:needs-judgment"

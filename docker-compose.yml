@@ -1,0 +1,186 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: tarmacview-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tarmacview}
+      POSTGRES_USER: ${POSTGRES_USER:-tarmacview}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tarmacview}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tarmacview} -d ${POSTGRES_DB:-tarmacview}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tarmacview-backend
+    env_file:
+      - path: .env.docker
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tarmacview}:${POSTGRES_PASSWORD:-tarmacview}@postgres:5432/${POSTGRES_DB:-tarmacview}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set - run start.sh / start.bat to generate .env.docker, or set it in your shell}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost"]}
+      # Optional. The bundled seed ships the 5 demo airports, so this is
+      # only needed for runtime "add airport by ICAO" lookups in the UI.
+      # Provide via shell env or .env.docker; empty by default.
+      OPENAIP_API_KEY: ${OPENAIP_API_KEY:-}
+      # Field hub proxy (compose profile "field"). Empty url means no hub -
+      # the field-link status endpoint reports offline without a network call.
+      FIELDHUB_URL: ${FIELDHUB_URL:-}
+      FIELDHUB_SHARED_SECRET: ${FIELDHUB_SHARED_SECRET:-}
+      FIELDHUB_CA: ${FIELDHUB_CA:-}
+    restart: unless-stopped
+    volumes:
+      - ./certs/fieldhub:/certs/fieldhub:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_CESIUM_ION_TOKEN: ${VITE_CESIUM_ION_TOKEN:-}
+    container_name: tarmacview-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # field profile - local dji cloud api stack (docker compose --profile field up).
+  # wireless mission dispatch + media return per docs/specs/FIELD-HUB.md.
+  # run scripts/field-hub/gen-certs.sh once before the first start.
+  fieldhub:
+    build:
+      context: ./fieldhub
+      dockerfile: Dockerfile
+    container_name: tarmacview-fieldhub
+    profiles: ["field"]
+    env_file:
+      - path: .env.docker
+        required: false
+    environment:
+      FIELDHUB_MQTT_HOST: emqx
+      FIELDHUB_MQTT_PORT: "8883"
+      FIELDHUB_MINIO_ENDPOINT: http://minio:9000
+      FIELDHUB_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-tarmacview}
+      FIELDHUB_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-tarmacview-minio}
+      # lan-reachable minio url baked into presigned wayline downloads - set
+      # to the laptop's lan ip (http://192.168.x.x:9000), never a compose hostname
+      # both fed from one host var - the same lan address serves presigned
+      # downloads and sts payloads
+      FIELDHUB_MINIO_PUBLIC_ENDPOINT: ${FIELDHUB_MINIO_DEVICE_ENDPOINT:-}
+      # device-facing object-store endpoint handed to pilot in sts payloads -
+      # the laptop's lan ip (http://192.168.x.x:9000), never a compose hostname
+      FIELDHUB_MINIO_DEVICE_ENDPOINT: ${FIELDHUB_MINIO_DEVICE_ENDPOINT:-}
+      # backend base url for media-event reporting (compose-internal)
+      FIELDHUB_BACKEND_URL: http://backend:8000
+      FIELDHUB_TLS_CERT: /certs/server.crt
+      FIELDHUB_TLS_KEY: /certs/server.key
+      FIELDHUB_SHARED_SECRET: ${FIELDHUB_SHARED_SECRET:-}
+      # device registry lives in the shared postgres, own "fieldhub" schema
+      FIELDHUB_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tarmacview}:${POSTGRES_PASSWORD:-tarmacview}@postgres:5432/${POSTGRES_DB:-tarmacview}
+      # device-facing broker address handed to pilot at login - set this to
+      # the laptop's lan ip (ssl://192.168.x.x:8883), never a compose hostname
+      FIELDHUB_MQTT_DEVICE_ADDR: ${FIELDHUB_MQTT_DEVICE_ADDR:-}
+      # pilot login account - login stays disabled while the password is empty
+      FIELDHUB_PILOT_USERNAME: ${FIELDHUB_PILOT_USERNAME:-pilot}
+      FIELDHUB_PILOT_PASSWORD: ${FIELDHUB_PILOT_PASSWORD:-}
+      # dji developer app credentials the connect page verifies via jsbridge -
+      # the page reports unconfigured while these are empty
+      FIELDHUB_DJI_APP_ID: ${FIELDHUB_DJI_APP_ID:-}
+      FIELDHUB_DJI_APP_KEY: ${FIELDHUB_DJI_APP_KEY:-}
+      FIELDHUB_DJI_APP_LICENSE: ${FIELDHUB_DJI_APP_LICENSE:-}
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./certs/fieldhub:/certs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      emqx:
+        condition: service_started
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import ssl, urllib.request; urllib.request.urlopen('https://localhost:8443/healthz', context=ssl.create_default_context(cafile='/certs/ca.crt'))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  emqx:
+    image: emqx/emqx:5.8.9
+    container_name: tarmacview-emqx
+    profiles: ["field"]
+    restart: unless-stopped
+    environment:
+      EMQX_LISTENERS__SSL__DEFAULT__BIND: "0.0.0.0:8883"
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CERTFILE: /certs/server.crt
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__KEYFILE: /certs/server.key
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CACERTFILE: /certs/ca.crt
+      # server-side tls only for now - per-device auth lands with the dji protocol work
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__VERIFY: verify_none
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./certs/emqx:/certs:ro
+      - emqx-data:/opt/emqx/data
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: tarmacview-minio
+    profiles: ["field"]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-tarmacview}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-tarmacview-minio}
+    ports:
+      - "9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+  emqx-data:
+  minio-data:

@@ -1,0 +1,156 @@
+name: harnext doc-gardening
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  claude:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    concurrency:
+      group: harnext-doc-gardening-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          # PAT_TOKEN so the agent's `git push` is authored by the user,
+          # not the GH Actions bot. Required for commits to show as
+          # Štefan in the resulting PR.
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "Štefan Moravík"
+          git config --global user.email "stevko.moravik@gmail.com"
+
+      - name: Run Claude Code
+        id: claude
+        env:
+          # PAT so any `gh` calls the agent makes (comments, etc.) act
+          # as the user. PR creation itself happens in a later step.
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the doc-gardening stage. The merged PR is #${{ github.event.pull_request.number }}. You touch ONLY documentation files: `docs/**`, root `*.md`, and per-package `CLAUDE.md` files. No code changes.
+
+            Step 0 — figure out what merged:
+            - `gh pr view ${{ github.event.pull_request.number }} --json title,body,files`
+            - `gh pr diff ${{ github.event.pull_request.number }} --name-only > /tmp/merged-files.txt`
+
+            ## Part 1 — User-facing doc reconciliation
+
+            Update human-readable docs to match the merged change:
+            - `docs/specs/SPEC.md` if domain model, enums, status machine, or trajectory rules changed.
+            - `docs/specs/WIREFRAME.md` if any frontend page gained/lost fields, interactions, or routes.
+            - `docs/conventions.md` if conventions actually shifted (rare).
+            - Root `CLAUDE.md` ONLY if the user explicitly asked — it is protected by default.
+            - Fix dead links and stale paths surfaced by `git grep` against current file locations.
+
+            Commit these as `docs: <short>` (e.g., `docs: update SPEC for inspection.heading_override`).
+
+            ## Part 2 — Agent-readability docs (per-package CLAUDE.md)
+
+            Goal: every future agent run that works inside one of these packages auto-loads a short manual describing the package. Claude Code walks up from the working directory and includes every `CLAUDE.md` it finds in context — that is the entire delivery mechanism, do not rename or relocate these files.
+
+            Eligible locations (only these — do NOT scatter `CLAUDE.md` elsewhere):
+            - `backend/app/services/CLAUDE.md`
+            - `backend/app/models/CLAUDE.md`
+            - `backend/app/api/routes/CLAUDE.md`
+            - `backend/app/schemas/CLAUDE.md`
+            - `frontend/src/components/map/CLAUDE.md`
+            - `frontend/src/contexts/CLAUDE.md`
+            - `frontend/src/hooks/CLAUDE.md`
+            - `frontend/src/api/CLAUDE.md`
+
+            For each eligible directory whose files appear in `/tmp/merged-files.txt`:
+            1. If `CLAUDE.md` doesn't exist yet in that directory, create it.
+            2. If it exists, refresh it to match current code.
+
+            Each per-package `CLAUDE.md` stays short (≤ 60 lines) and contains:
+            - **Purpose** — one sentence on what the package does.
+            - **Public API surface** — the symbols other packages import from this one. List `name → one-line summary`.
+            - **Invariants** — non-obvious rules a contributor must not violate (e.g., "Mission.transition_to() is the ONLY way to change status; direct assignment bypasses validation").
+            - **Cross-package dependencies** — packages this one imports from, packages that import from this one (one-liners).
+            - **Gotchas** — surprises future agents would benefit from knowing (regressions to DRAFT, idempotency requirements, retry semantics, etc.).
+
+            Write for a human contributor, not in shorthand. A new dev should be able to read it cold.
+
+            Do NOT include:
+            - Exhaustive type signatures (the code is the source of truth).
+            - File-by-file inventories (they decay fast).
+            - Anything already obvious from the directory layout.
+            - Thesis references or AI attribution.
+
+            Commit these as `docs(agent): <short>` (e.g., `docs(agent): refresh services manual for trajectory builder`). One commit per package directory.
+
+            ## Output
+
+            - Create a branch `docs/gardening-after-${{ github.event.pull_request.number }}` from `main` and commit your changes there.
+            - **Do NOT call `gh pr create`** — the workflow opens the PR in a follow-up step using the user's PAT so the PR is authored by Štefan, not the bot.
+            - When you are done, push the branch and write the PR title and body to disk so the workflow can pick them up:
+              ```
+              git push -u origin docs/gardening-after-${{ github.event.pull_request.number }}
+              mkdir -p /tmp/harnext-pr-meta
+              echo "docs: gardening after #${{ github.event.pull_request.number }}" > /tmp/harnext-pr-meta/title.txt
+              cat > /tmp/harnext-pr-meta/body.md <<'EOF'
+              ## Summary
+              <one paragraph describing what was reconciled>
+
+              ## docs/ changes
+              <bullet list, or "none">
+
+              ## Per-package CLAUDE.md changes
+              <bullet list of paths refreshed/created, or "none">
+
+              ## Risk tier
+              T1
+              EOF
+              ```
+            - If neither part has changes to make, exit cleanly without pushing or writing meta files. The workflow detects the missing files and skips PR creation.
+
+            ## Rules
+
+            - No code changes outside `docs/**`, root `*.md`, and per-package `CLAUDE.md` files in the eligible list above.
+            - Use conventional commit prefixes (`docs:`, `docs(agent):`); messages stay short, lowercase, casual.
+            - Git identity is set at the workflow level — do NOT run `git config user.name/user.email` yourself, it's already correct.
+            - Sparse, lowercase comment style. Dashes (`-`), not em-dashes (`—`). No thesis references.
+          claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 200 --allowedTools "Read,Glob,Grep,Bash,Edit,Write"'
+          allowed_bots: 'github-actions'
+
+      - name: Open PR (as user, via PAT)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          MERGED_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/harnext-pr-meta/title.txt ] || [ ! -f /tmp/harnext-pr-meta/body.md ]; then
+            echo "no PR meta files — agent reported no doc changes; skipping PR creation"
+            exit 0
+          fi
+          BRANCH="docs/gardening-after-$MERGED_PR"
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "branch $BRANCH not pushed — nothing to PR"
+            exit 0
+          fi
+          TITLE="$(cat /tmp/harnext-pr-meta/title.txt)"
+          gh pr create --draft --base main --head "$BRANCH" \
+            --title "$TITLE" \
+            --body-file /tmp/harnext-pr-meta/body.md
+
+      - name: Comment on PR on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$NUM" --body "harnext:doc-gardening failed: agent run did not complete successfully. See workflow run for details."

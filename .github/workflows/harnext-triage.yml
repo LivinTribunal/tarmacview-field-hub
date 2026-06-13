@@ -1,0 +1,124 @@
+name: harnext triage
+on:
+  issues:
+    types: [ labeled ]
+  pull_request:
+    types: [ labeled ]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue or PR number to run this stage on"
+        required: true
+        type: string
+
+jobs:
+  triage:
+    if: >-
+      github.event_name == 'workflow_dispatch' || github.event.label.name ==
+      'harnext:triage'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
+    concurrency:
+      group: harnext-triage-${{ github.event.issue.number ||
+        github.event.pull_request.number || inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the triage stage. Do not change any code.
+
+            Read the issue body via `gh issue view ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --json title,body,labels,author`. Skim `CLAUDE.md`, `docs/specs/SPEC.md`, and `harness.config.json` only as needed to judge scope.
+
+            Classify and post ONE comment with `gh issue comment ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --body @<file>` containing:
+            - **Severity**: bug-critical | bug-normal | feature | chore | question
+            - **Scope**: backend | frontend | both | docs | infra (name the package paths: `backend/app/...`, `frontend/src/...`)
+            - **Risk tier**: T1 | T2 | T3 — flag T3 if it touches `**/trajectory*`, `**/safety_validator*`, `**/flight_plan*`, or `**/migrations/versions/*`
+            - **Ready to plan?**: yes / no — say no only if the issue lacks a reproducible behavior or acceptance criteria, and list the missing inputs
+            - **Notes**: 1–3 lines flagging protected files (`.github/workflows/**`, `harness.config.json`, `CLAUDE.md`, `backend/requirements.txt`, `frontend/package-lock.json`) or spec docs the planner must read.
+
+            Do not add labels. Do not open a PR. Comment once and stop.
+          claude_args: "--model claude-opus-4-8 --effort xhigh --max-turns 200 --allowedTools \"Read,Glob,Grep,Bash\""
+          allowed_bots: "github-actions"
+
+      - name: Detect handoff PR (if agent opened one)
+        if: success()
+        id: handoff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number ||
+            inputs.issue_number }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          PR_NUMBER=""
+          if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+            AGENT_TEXT=$(jq -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | join("\n")' "$EXECUTION_FILE" 2>/dev/null || echo "")
+            PR_URL=$(echo "$AGENT_TEXT" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -n1 || true)
+            if [ -n "$PR_URL" ]; then
+              PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+            fi
+          fi
+
+          if [ -z "$PR_NUMBER" ]; then
+            PR_NUMBER=$(gh api "repos/${{ github.repository }}/issues/$NUM/timeline" \
+              --jq '[.[] | select(.event == "cross-referenced") | .source.issue | select(.pull_request != null) | .number] | last' 2>/dev/null || echo "")
+          fi
+
+          if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "has_pr=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_pr=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Transition labels on success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number ||
+            inputs.issue_number }}
+          HAS_PR: ${{ steps.handoff.outputs.has_pr }}
+          PR_NUMBER: ${{ steps.handoff.outputs.pr_number }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:triage" || true
+
+          if [ "$HAS_PR" = "true" ] && [ -n "$PR_NUMBER" ]; then
+            gh label create "harnext:awaiting-approval" --color "fbca04" --description "Awaiting human approval" 2>/dev/null || true
+            gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" \
+              -f "labels[]=harnext:awaiting-approval" || true
+
+            gh label create "harnext:plan" --color "0e8a16" --description "Ready for plan stage" 2>/dev/null || true
+            gh api -X POST "repos/${{ github.repository }}/issues/$PR_NUMBER/labels" \
+              -f "labels[]=harnext:plan" || true
+            gh workflow run harnext-plan.yml --field issue_number=$PR_NUMBER || true
+          else
+            gh label create "harnext:plan" --color "0e8a16" --description "Ready for plan stage" 2>/dev/null || true
+            gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" \
+              -f "labels[]=harnext:plan" || true
+            gh workflow run harnext-plan.yml --field issue_number=$NUM || true
+          fi
+
+      - name: Park on needs-judgment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number ||
+            inputs.issue_number }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:triage" || true
+          gh label create "harnext:needs-judgment" --color "d93f0b" --description "Needs human judgment" 2>/dev/null || true
+          gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" \
+            -f "labels[]=harnext:needs-judgment" || true

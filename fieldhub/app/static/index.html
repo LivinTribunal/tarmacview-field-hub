@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TarmacView Field Hub</title>
+<style>
+  /* read on a 5-7" rc screen - large text, high contrast, no dependencies */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 20px;
+    background: #10151c;
+    color: #e8edf4;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 20px;
+    line-height: 1.5;
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 30px; margin: 0; }
+  .subtitle { margin: 4px 0 24px; color: #93a1b3; font-size: 18px; }
+  #browser-banner {
+    margin: 0 0 24px;
+    padding: 18px;
+    border: 1px solid #3a4757;
+    border-radius: 10px;
+    background: #1a212b;
+    font-size: 22px;
+  }
+  form { display: grid; gap: 14px; margin: 0 0 28px; }
+  label { display: grid; gap: 6px; font-size: 18px; color: #93a1b3; }
+  input {
+    font-size: 22px;
+    padding: 12px 14px;
+    border: 1px solid #3a4757;
+    border-radius: 10px;
+    background: #1a212b;
+    color: #e8edf4;
+  }
+  button {
+    font-size: 22px;
+    font-weight: 600;
+    padding: 14px;
+    border: 0;
+    border-radius: 10px;
+    background: #2f6fed;
+    color: #ffffff;
+  }
+  button:disabled, input:disabled { opacity: 0.45; }
+  #status-panel { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  #status-panel li {
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: #1a212b;
+  }
+  .mark { font-size: 24px; min-width: 28px; text-align: center; }
+  .step { font-weight: 600; min-width: 170px; }
+  .state { color: #93a1b3; }
+  li[data-state="pending"] .mark { color: #5b6877; }
+  li[data-state="running"] .mark, li[data-state="waiting"] .mark { color: #e8b339; }
+  li[data-state="ok"] .mark { color: #43c272; }
+  li[data-state="error"] .mark { color: #e35d5d; }
+  li[data-state="error"] .state { color: #e35d5d; }
+  #error-line {
+    margin: 20px 0 0;
+    padding: 16px;
+    border-radius: 10px;
+    background: #2b1a1c;
+    color: #ff9d9d;
+    font-size: 22px;
+    overflow-wrap: anywhere;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>TarmacView Field Hub</h1>
+  <p class="subtitle">DJI Pilot 2 connect page</p>
+
+  <p id="browser-banner" hidden>
+    Open this page in DJI Pilot 2 (Cloud Service &rarr; third-party platform)
+    to connect to the field hub.
+  </p>
+
+  <form id="login-form" hidden>
+    <label>Username
+      <input id="username" autocomplete="username" autocapitalize="none" disabled>
+    </label>
+    <label>Password
+      <input id="password" type="password" autocomplete="current-password" disabled>
+    </label>
+    <button id="login-button" type="submit" disabled>Log in</button>
+  </form>
+
+  <ul id="status-panel">
+    <li id="status-license" data-state="pending">
+      <span class="mark">&#9675;</span><span class="step">DJI license</span><span class="state">waiting</span>
+    </li>
+    <li id="status-login" data-state="pending">
+      <span class="mark">&#9675;</span><span class="step">Login</span><span class="state">waiting</span>
+    </li>
+    <li id="status-api" data-state="pending">
+      <span class="mark">&#9675;</span><span class="step">API module</span><span class="state">waiting</span>
+    </li>
+    <li id="status-mqtt" data-state="pending">
+      <span class="mark">&#9675;</span><span class="step">MQTT link</span><span class="state">waiting</span>
+    </li>
+    <li id="status-media" data-state="pending">
+      <span class="mark">&#9675;</span><span class="step">Media auto-upload</span><span class="state">waiting</span>
+    </li>
+  </ul>
+
+  <p id="error-line" hidden></p>
+</main>
+
+<script src="/static/pilot-connect.js"></script>
+<script>
+(function () {
+  "use strict";
+  var connect = window.TarmacPilotConnect;
+  var banner = document.getElementById("browser-banner");
+  var form = document.getElementById("login-form");
+  var usernameInput = document.getElementById("username");
+  var passwordInput = document.getElementById("password");
+  var loginButton = document.getElementById("login-button");
+  var errorLine = document.getElementById("error-line");
+
+  var MARKS = { pending: "○", running: "…", waiting: "…", ok: "✓", error: "✗" };
+
+  function setStatus(step, state, detail) {
+    var row = document.getElementById("status-" + step);
+    if (!row) return;
+    row.setAttribute("data-state", state);
+    row.querySelector(".mark").textContent = MARKS[state] || "○";
+    row.querySelector(".state").textContent = detail || state;
+    if (state === "error") {
+      errorLine.hidden = false;
+      errorLine.textContent = detail || step + " failed";
+    }
+  }
+
+  function setFormEnabled(enabled) {
+    usernameInput.disabled = !enabled;
+    passwordInput.disabled = !enabled;
+    loginButton.disabled = !enabled;
+  }
+
+  if (!window.djiBridge) {
+    banner.hidden = false;
+    return;
+  }
+  if (!connect) {
+    errorLine.hidden = false;
+    errorLine.textContent = "pilot-connect.js failed to load - reload the page";
+    return;
+  }
+  form.hidden = false;
+
+  // the first flow run waits here for the form submit; after a failed run the
+  // next submit starts a fresh flow with the entered credentials
+  var resolveCredentials = null;
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    errorLine.hidden = true;
+    var credentials = { username: usernameInput.value, password: passwordInput.value };
+    setFormEnabled(false);
+    if (resolveCredentials) {
+      var resolve = resolveCredentials;
+      resolveCredentials = null;
+      resolve(credentials);
+    } else {
+      startFlow(credentials);
+    }
+  });
+
+  function waitForCredentials() {
+    return new Promise(function (resolve) {
+      resolveCredentials = resolve;
+      setFormEnabled(true);
+    });
+  }
+
+  function startFlow(credentials) {
+    connect.runConnectFlow({
+      bridge: window.djiBridge,
+      fetchFn: window.fetch.bind(window),
+      apiHost: window.location.origin,
+      onStatus: setStatus,
+      registerCallback: function (name, handler) { window[name] = handler; },
+      getCredentials: credentials
+        ? function () { return Promise.resolve(credentials); }
+        : waitForCredentials,
+    }).then(function (result) {
+      if (!result.completed) setFormEnabled(true);
+    });
+  }
+
+  startFlow(null);
+})();
+</script>
+</body>
+</html>

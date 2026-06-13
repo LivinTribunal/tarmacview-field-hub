@@ -1,0 +1,127 @@
+name: Harnext Review
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue or PR number to run this stage on'
+        required: true
+        type: string
+
+jobs:
+  claude:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'harnext:review'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
+    concurrency:
+      group: harnext-review-review-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code (reviewer)
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the PR review agent. Post ONE review on PR ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}.
+
+            Read `gh pr view ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --json title,body,files,additions,deletions`, `gh pr diff ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`, and the linked issue. Re-read `docs/specs/SPEC.md` for any feature change and `docs/specs/WIREFRAME.md` for UI.
+
+            Check against this codebase:
+            - DDD-lite: routes (`backend/app/api/routes/`) are HTTP-only; logic on model methods or services; routes don't import models directly.
+            - Pydantic DTOs named `{Entity}Response|Create|Update`; API paths `/api/v1/{resource}`.
+            - Every Python function/class has a one-line lowercase docstring.
+            - Imports ordered stdlib → third-party → local (Ruff `I`).
+            - Frontend: `t()` for all user-facing strings; types in `src/types/{domain}.ts`; design tokens `--tv-*` (no raw Tailwind colors).
+            - Tests added/updated under `backend/tests/` and `frontend/src/**/*.test.tsx`. T3 paths (`**/trajectory*`, `**/safety_validator*`, `**/flight_plan*`, `**/migrations/versions/*`) get extra coverage and a human-review note.
+            - Protected files untouched: `.github/workflows/**`, `harness.config.json`, `backend/requirements.txt`, `frontend/package-lock.json`.
+            - Commits: conventional commit prefixes (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`, `ci:`) are required; messages stay short, lowercase, casual.
+            - Migrations in `backend/migrations/versions/` are reversible and reference real models.
+
+            OPSEC checks — flag as COMMENT (suggest the human edit before merge, do not block):
+            - PR body that reads as obvious LLM output: emoji headers (✅, ✓, 🎉, 🚀), exhaustive checkmark lists, motivational closers, first-person phrasing like "I've implemented…" / "Let me…".
+
+            Do NOT flag commit author identity. A downstream pipeline agent rewrites authors to `Štefan Moravík <stevko.moravik@gmail.com>` and the PR is squash-merged, so `claude[bot]` / `github-actions[bot]` / other bot authors on individual commits are expected and handled. Never include this in your review.
+
+            CI failures (when present in the PR's check runs):
+            - Only checks with `conclusion == "failure"` count. Cancelled, skipped, neutral, and stale runs are NOT failures and must not appear in your review. Cancelled runs on the first review iteration are intentional — the implement agent verifies the pipeline locally before opening the PR and cancels the duplicate hosted runs to save Actions minutes.
+            - Every actually-failed check MUST appear as a blocking issue with the check name, the exact file:line from the annotation when available, and a specific fix instruction. The fix agent reads your findings verbatim, so be precise (e.g., "ruff E501 at `backend/app/services/foo.py:120` — split the line", not "fix lint").
+            - Never APPROVE a PR with a check whose conclusion is `failure`. Verdict is REQUEST_CHANGES.
+
+            Conciseness:
+            - Silence means approval. Do NOT write sentences praising what the code does correctly. Only write about problems.
+            - Summary: one sentence. Risk tier: one line. Architecture: if clean, "No boundary violations." Test coverage: only mention gaps; if adequate, "Adequate."
+
+            Verdict via `gh pr review ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`:
+            - `--approve` if everything passes.
+            - `--request-changes` with a body listing each blocking issue as `path:line — problem — required fix`.
+            - `--comment` for ESCALATE: human judgment needed (T3 path, ambiguous spec, breaking API).
+
+            One review only. Be specific, no filler.
+          claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 200 --allowedTools "Read,Glob,Grep,Bash"'
+          allowed_bots: 'github-actions'
+
+      - name: Loop control (decide next step)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+
+          labels=$(gh api "repos/${{ github.repository }}/issues/$NUM/labels" --jq '.[].name')
+          iter=$(printf '%s\n' "$labels" | grep -oE '^harnext:review-iter-[0-9]+$' | head -n1 | grep -oE '[0-9]+$' || echo "")
+          if [ -z "$iter" ]; then iter=1; fi
+
+          state=$(gh api "repos/${{ github.repository }}/pulls/$NUM/reviews" --jq '.[].state' | tail -n1 || echo "")
+
+          echo "iter=$iter state=$state"
+
+          if [ "$state" = "CHANGES_REQUESTED" ] && [ "$iter" -lt 5 ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review-iter-$iter" || true
+            next=$((iter + 1))
+            gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:review-iter-$next"
+            gh workflow run "harnext-review-fix.yml" --field issue_number="$NUM"
+            exit 0
+          fi
+
+          if [ "$state" = "CHANGES_REQUESTED" ] && [ "$iter" -ge 5 ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review-iter-$iter" || true
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review" || true
+            gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:needs-judgment"
+            exit 0
+          fi
+
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review-iter-$iter" || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review" || true
+          gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:verify"
+          gh workflow run "harnext-verify.yml" --field issue_number="$NUM" || true
+
+      - name: Park on needs-judgment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          labels=$(gh api "repos/${{ github.repository }}/issues/$NUM/labels" --jq '.[].name' || echo "")
+          iter=$(printf '%s\n' "$labels" | grep -oE '^harnext:review-iter-[0-9]+$' | head -n1 | grep -oE '[0-9]+$' || echo "")
+          if [ -n "$iter" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review-iter-$iter" || true
+          fi
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:review" || true
+          gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:needs-judgment"

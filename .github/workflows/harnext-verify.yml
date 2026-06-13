@@ -1,0 +1,338 @@
+name: harnext verify
+# IMPORTANT: workflow_dispatch is required alongside the labeled trigger
+# because GitHub suppresses `issues.labeled` / `pull_request.labeled` events
+# when the label was added via GITHUB_TOKEN (infinite-loop guard). Any
+# workflow in this pipeline that is handed off to from another workflow
+# must accept `gh workflow run` dispatches with a number input.
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue or PR number to run this stage on'
+        required: true
+        type: string
+
+jobs:
+  claude:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'harnext:verify'
+    runs-on: ['self-hosted', 'harnext', 'harnext-cbbe54556b22']
+    # failsafe: the claude-code-action bun wrapper has hung indefinitely
+    # in past runs (SDK reports success, then bun waits on stdio pipes
+    # from leftover MCP servers / playwright chromium / dev servers and
+    # never exits). without a cap, runs sit on the self-hosted runner
+    # for hours and queue every later verify behind them.
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
+    concurrency:
+      group: harnext-verify-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          # preserve gitignored backend/.venv and frontend/node_modules
+          # between runs so dep installs are incremental, not 90s every run
+          clean: false
+          # PAT so any mechanical-fix `git push` is authored by the user.
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "Štefan Moravík"
+          git config --global user.email "stevko.moravik@gmail.com"
+
+      - name: Bring up local stack (postgres + backend :8001 + frontend :5174)
+        id: stack_up
+        run: bash scripts/verify-stack-up.sh
+
+      - name: Snapshot pre-existing MCP / browser PIDs
+        # the post-claude pkill must NOT touch MCP servers or browsers
+        # owned by the operator's interactive claude sessions running on
+        # this same mac. record what's already running so the cleanup
+        # step can diff and only kill PIDs that appeared during the run.
+        run: |
+          mkdir -p /tmp/verify
+          : > /tmp/verify/pre.pids
+          for pat in 'mempalace.mcp_server' 'chrome-devtools-mcp' '@modelcontextprotocol/server-puppeteer' '\.cache/ms-playwright/.*chromium' 'playwright.*chromium'; do
+            pgrep -f "$pat" >> /tmp/verify/pre.pids || true
+          done
+          sort -u /tmp/verify/pre.pids -o /tmp/verify/pre.pids
+          echo "pre-claude pids:"; cat /tmp/verify/pre.pids
+
+      - name: Start anti-hang watchdog
+        # runs in parallel with the claude step. polls the run-stub comment
+        # until claude PATCHes it with the final report, then kills the
+        # orphan MCP / browser children whose stdio pipes hang the bun
+        # wrapper. without this, the claude step idles ~80min after the
+        # SDK reports success, blocking later verifies. the post-claude
+        # cleanup step (further down) is structurally too late on its own
+        # because it can only run after the claude step exits.
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p /tmp/verify
+          # setsid + nohup so the process survives the step's shell exit
+          # and ignores SIGHUP. </dev/null + & detaches stdin/stdout.
+          setsid nohup bash scripts/verify-watchdog.sh </dev/null >/tmp/verify/watchdog.out 2>&1 &
+          echo $! > /tmp/verify/watchdog.pid
+          echo "watchdog pid=$(cat /tmp/verify/watchdog.pid)"
+
+      - name: Run Claude Code
+        id: claude
+        env:
+          VERIFY_BACKEND_URL: http://localhost:8001
+          VERIFY_FRONTEND_URL: http://localhost:5174
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          # OAuth via the Claude Code GitHub App — usage counts against the
+          # user's Claude subscription (Pro/Max), not metered API billing.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the verify stage. Operate on the PR branch.
+
+            The issue or PR number for this run is: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+
+            ## 0. Setup
+            - `gh pr checkout <pr>` then `git pull`.
+            - Capture the linked issue: parse `Closes #N` / `Fixes #N` from `gh pr view <pr> --json body,closingIssuesReferences`. Read that issue with `gh issue view <N>`.
+            - Compute the changed-file list once: `gh pr diff <pr> --name-only > /tmp/pr-files.txt`.
+
+            ## 0a. Local stack — already up before this prompt runs
+            The workflow ran `scripts/verify-stack-up.sh` in a prior step, so a hermetic stack is live for the duration of this run:
+            - **Frontend (vite dev)** — `$VERIFY_FRONTEND_URL` (i.e. `http://localhost:5174`). This is what the browser-verify scenario must navigate to.
+            - **Backend (uvicorn)** — `$VERIFY_BACKEND_URL` (i.e. `http://localhost:8001`). The frontend's `/api` requests proxy here.
+            - **Database** — ephemeral `tarmacview_verify` Postgres database, freshly migrated (`alembic upgrade head`) and seeded (`python -m app.seed`). Has the default users from `backend/.env`: admin `admin@tmv.com / adminadmin`, coordinator `coord@tmv.com / coordinator`, operator `operator@tmv.com / operator`. Ground-truth credentials live in `backend/.env`; do not hardcode different ones.
+
+            Logs from stack startup are at `.harnext/verify-logs/{alembic,seed,backend,frontend}.log` if you need to debug something the browser surfaces.
+
+            ## 1. Post a stub running comment FIRST (before any work)
+            ```
+            RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)
+            COMMENT_ID=$(gh api -X POST repos/:owner/:repo/issues/<pr>/comments \
+              -f body="verify running… run \`$RUN_ID\`" -q .id)
+            mkdir -p /tmp/verify
+            echo "$COMMENT_ID" > /tmp/verify/comment-id.txt
+            echo "$RUN_ID"     > /tmp/verify/run-id.txt
+            ```
+            Keep `$COMMENT_ID` and `$RUN_ID` for later. Do NOT create a second comment. The post-run anti-fabrication gates (Layer A static lint, Layer B sanity floors) read these files to append failure sections to the same comment.
+
+            ## 2. Gates (run all, capture exit codes)
+            - Backend lint: `cd backend && ruff check . && ruff format --check .`
+            - Backend tests: `cd backend && pytest`
+            - Frontend lint: `cd frontend && npm run lint`
+            - Frontend typecheck: `cd frontend && npx tsc --noEmit`
+            - Frontend tests: `cd frontend && npx vitest run`
+            - Frontend build: `cd frontend && npm run build`
+            Commit ONLY mechanical fixes (ruff format, import order, generated types). Push if you commit.
+
+            ## 3. UI verification — MANDATORY when the change has user-visible effects
+
+            The trigger for UI verification is **the linked issue's behavior description, not the file paths in the diff**. Backend-only diffs routinely change what the UI displays — those still need UI verification.
+
+            UI verification is REQUIRED when ANY of the following is true:
+            - any line in `/tmp/pr-files.txt` starts with `frontend/`;
+            - the diff changes an API response field that the frontend renders (scalar values, new error messages, new fields on `*Response` schemas, status code changes);
+            - the linked issue's acceptance criteria mention a panel, page, modal, button, displayed value, route, redirect, toast, error message, or any other user-visible surface — even if the diff is purely backend.
+
+            "Backend-only PR" is NOT a valid skip reason. If the issue says "the stats panel shows -133 m AGL" and the fix changes the value the API returns to that panel, you MUST open the panel in the browser and confirm the rendered value is correct. The point of verify is to catch the regression that unit tests miss because mocked-response tests don't catch broken FE bindings, and unit tests on either side don't catch end-to-end behavior.
+
+            Use the bundled `browser-verify` skill. There is no fallback and no escape hatch when this section's trigger fires.
+
+            **Browser mode: bundled (MANDATORY for verify).** Set `BROWSER_MODE=bundled` in the scenario's env. Skip steps 3 and 4 of the SKILL (`detect-browser.mjs`, `profile-lock.mjs`) — bundled mode does not need them. Reasons this matters: (a) the host's system Chrome may be x86_64 and run under Rosetta on Apple Silicon, making every screenshot/click stall for seconds; (b) persistent profiles inherit per-host zoom from the user's real Chrome (`Cmd+=` on `localhost`), so screenshots end up showing only a fragment of the asserted UI. Bundled mode uses Playwright's arm64-native Chromium with a fresh context — neither bug applies.
+
+            **Browser navigates to `$VERIFY_FRONTEND_URL`** (the live vite dev server brought up in step 0a). Set the scenario's `STARTING_URL` to this value, NOT to a `localhost:5173` placeholder from the skill template.
+
+            Forbidden excuses (do NOT write any of these in the comment): "requires authenticated workspace", "skipped: tool missing", "change is too small/trivial to test", "no reproduction available", "stack not running" (the stack IS running — see step 0a).
+
+            Scenario rules:
+            - The scenario must verify what the LINKED ISSUE asks for, not a generic health check. Derive the assertion from the issue's behavior description AND the PR diff: name the specific route, DOM element, CSS class, network call, or text the change touches.
+            - The assertion must be one that would FAIL on `origin/main` (pre-fix) and PASS on the PR branch. That contrast is the point of verify. Generic assertions like "body is visible", "content length > 0", or "no crash" are forbidden.
+            - **No synthetic DOM.** You may not create DOM nodes via `evaluate_script`, `addStyleTag`, `addScriptTag`, `setContent`, `appendChild`, `insertAdjacentHTML`, or any other DOM-mutation API. The element you assert on must already exist in the rendered application at the time of assertion. Reading DOM state via `evaluate_script` (`getComputedStyle`, `querySelector`, returning values) is fine — writing or injecting is not. If the change cannot be exercised through the real app's UI flow, FAIL the verify and explain why; do NOT synthesize a substitute element. The post-run static lint enforces this mechanically (see `scripts/verify-lint-scenario.sh`); a scenario containing any of those patterns will fail the workflow regardless of the verdict you write.
+            - **Evidence-grade assertions (MANDATORY).** For any displayed value (panel text, badge, toast, computed number, error message), the final assertion MUST call `assertRenderedValue(page, locator, { expected, label, runDir: RUN_DIR })` from the skill's capture-lib. That helper (a) scrolls the element into view, (b) verifies its bounding box is inside the viewport, (c) saves an element-screenshot AND a fullPage screenshot under `<runDir>/snapshots/`, (d) string-compares rendered text against `expected`. Plain `Locator.isVisible()` / `toBeVisible()` is FORBIDDEN as a final assertion — it returns true for off-screen elements, so it does not prove the screenshot shows the asserted UI.
+            - **Cite the element screenshot, not `final.png`.** In the final report, the cited image must be `<runDir>/snapshots/<label>.element.png` (or `.fullpage.png` for layout claims). Citing only `final.png` does not prove the asserted thing was on screen.
+            - If the app redirects to `/sign-in`, `/login`, or `/auth`, log in first using the seeded admin user (`admin@tmv.com / adminadmin` from `backend/.env`). Do NOT accept the auth page as the end state.
+            - Network calls to `/api/*` will succeed because the frontend's vite proxy is configured to forward to `$VERIFY_BACKEND_URL`. If you see a 502/connection-refused, the backend died — read `.harnext/verify-logs/backend.log` and FAIL the stage.
+
+            Artifact handling:
+            - Copy the four artifacts (video, HAR, trace, final screenshot) out of the ephemeral worktree into `~/harnext-artifacts/$RUN_ID/`. Do NOT leave them under `~/.harnext/artifacts/...` — snap-confined viewers (VLC snap, Firefox snap) cannot open dot-directories, so the comment's cited paths must resolve.
+            - If only a `recording.webm` exists, convert it: `ffmpeg -y -i ~/harnext-artifacts/$RUN_ID/recording.webm -c:v libx264 -preset veryfast -crf 23 ~/harnext-artifacts/$RUN_ID/recording.mp4`. Playwright's webm has stream-level `duration=N/A` which the VLC snap refuses to play. Cite `.mp4` if conversion succeeded; cite `.webm` only as fallback.
+
+            FAIL the stage on ANY of:
+            - Non-zero exit from the `browser-verify` skill
+            - A new entry in `pageErrors` vs. `origin/main`
+            - A failing scenario assertion
+            - An `asserts.jsonl` row with `ok: false`
+            - Zero rows in `asserts.jsonl` for a run that should have asserted a rendered value (a passing UI verdict with no `assertRenderedValue` call is itself a fail — it means no evidence-grade assertion ran)
+            - Final scenario URL matches `/sign-in|/login|/auth` without an explicit login step earlier in the scenario
+
+            ## 4. Skip UI work ONLY when the change has no user-visible surface
+
+            Skipping is allowed for changes whose linked issue AND diff describe NONE of:
+            - a UI surface (panel, page, modal, button, route, displayed value, error message, redirect);
+            - an API response field rendered by the frontend.
+
+            Valid skip examples: pure refactors with no behavior change (renaming an internal function, restructuring a service that returns identical responses), test-only changes, dependency bumps with no API/behavior impact, CI / infra / docs / migration files that don't change any rendered value.
+
+            If you skip, write `SKIPPED-NO-UI-SURFACE` in the verdict (NOT `SKIPPED-BACKEND-ONLY`) and cite the specific acceptance criterion or diff inspection that confirms no UI surface is touched. "Backend-only" alone is not acceptable.
+
+            ## 5. Update the SAME comment in place (do not create a new one)
+            ```
+            gh api -X PATCH repos/:owner/:repo/issues/comments/$COMMENT_ID --field body=@<final-report.md>
+            ```
+            Final report includes: each gate name + exit code, UI verification verdict (PASS/FAIL/SKIPPED-NO-UI-SURFACE) with the asserted behavior in one sentence, cited artifact paths under `~/harnext-artifacts/$RUN_ID/` (must include the `<label>.element.png` for any rendered-value claim — NOT just `final.png`), and any commits you pushed.
+          # --dangerously-skip-permissions bypasses the tool allowlist and
+          # per-call permission prompts. safe here because verify runs on the
+          # self-hosted runner against an ephemeral stack, and the agent needs
+          # full tool access (browser-verify skill, mcp servers, ffmpeg) that
+          # an explicit allowlist can't easily enumerate.
+          claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 500 --dangerously-skip-permissions'
+          # Needed when another workflow dispatches this one via
+          # `gh workflow run` — the actor becomes github-actions[bot] and
+          # the action rejects bot actors unless listed here.
+          allowed_bots: 'github-actions'
+
+      # anti-fabrication gates (issue #289). claude has finished by here, so
+      # scenario.mjs and summary.json are on disk; we lint them mechanically.
+      # the gates run only when claude succeeded — if it failed, there's
+      # nothing to lint and the failure is already surfaced.
+      - name: Locate browser-verify run dir
+        id: locate
+        if: steps.claude.outcome == 'success'
+        run: |
+          set -euo pipefail
+          RUNDIR=$(ls -td .harnext/browser-verify/verify-* 2>/dev/null | head -1 || true)
+          if [ -z "$RUNDIR" ] || [ ! -f "$RUNDIR/scenario.mjs" ]; then
+            echo "no scenario.mjs — UI verification was skipped, anti-fabrication gates are no-ops"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "rundir=$RUNDIR" >> "$GITHUB_OUTPUT"
+          echo "located: $RUNDIR"
+
+      - name: Static scenario lint (Layer A)
+        id: lint
+        if: steps.claude.outcome == 'success' && steps.locate.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+          RUNDIR: ${{ steps.locate.outputs.rundir }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/verify
+          gh pr diff "$NUM" --name-only > /tmp/verify/changed-files.txt 2>/dev/null || : > /tmp/verify/changed-files.txt
+          if ! bash scripts/verify-lint-scenario.sh "$RUNDIR/scenario.mjs" /tmp/verify/changed-files.txt 2> /tmp/verify/lint-err.txt; then
+            cat /tmp/verify/lint-err.txt >&2
+            bash scripts/verify-comment-append.sh "Layer A — static scenario lint" /tmp/verify/lint-err.txt || true
+            exit 1
+          fi
+
+      - name: Post-run sanity floors (Layer B)
+        id: floors
+        # always() so floors run even if the static lint failed — both layers
+        # report independently to the comment, and both findings should land.
+        if: ${{ always() && steps.claude.outcome == 'success' && steps.locate.outputs.skip != '1' }}
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+          RUNDIR: ${{ steps.locate.outputs.rundir }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/verify
+          [ -s /tmp/verify/changed-files.txt ] || gh pr diff "$NUM" --name-only > /tmp/verify/changed-files.txt 2>/dev/null || : > /tmp/verify/changed-files.txt
+          COMMENT_ID=$(cat /tmp/verify/comment-id.txt 2>/dev/null || true)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq .body > /tmp/verify/comment-body.md 2>/dev/null || : > /tmp/verify/comment-body.md
+          else
+            : > /tmp/verify/comment-body.md
+          fi
+          if ! bash scripts/verify-sanity-floors.sh "$RUNDIR" /tmp/verify/comment-body.md /tmp/verify/changed-files.txt 2> /tmp/verify/floors-err.txt; then
+            cat /tmp/verify/floors-err.txt >&2
+            bash scripts/verify-comment-append.sh "Layer B — post-run sanity floors" /tmp/verify/floors-err.txt || true
+            exit 1
+          fi
+
+      - name: Kill orphaned children from the claude run
+        if: always()
+        # MCP servers (mempalace, chrome-devtools-mcp, puppeteer) and
+        # any chromium spawned by the browser-verify skill can outlive
+        # the claude SDK and hold the bun wrapper's stdio open. kill
+        # them so the runner exits promptly instead of leaning on the
+        # 90-min job timeout. SCOPE: only PIDs that didn't exist before
+        # the claude step started — the operator runs interactive claude
+        # sessions on this same mac, and a blanket pkill would take out
+        # those sessions' MCP children mid-conversation.
+        #
+        # in normal runs the in-parallel watchdog (started above) has
+        # already killed these so the claude step exits promptly. this
+        # step is a backstop: it runs after the claude step (or any of
+        # its replacements) exits no matter how, and catches anything
+        # the watchdog missed (e.g. claude failed before writing the
+        # comment id, so the watchdog never matched a finalization
+        # condition).
+        run: |
+          # stop the watchdog if it's still running - finalization either
+          # already happened or won't; nothing more for it to do.
+          WPID=$(cat /tmp/verify/watchdog.pid 2>/dev/null || true)
+          if [ -n "$WPID" ] && kill -0 "$WPID" 2>/dev/null; then
+            echo "stopping watchdog pid=$WPID"
+            kill -TERM "$WPID" 2>/dev/null || true
+          fi
+          if [ -f /tmp/verify/watchdog.log ]; then
+            echo "--- watchdog log ---"
+            cat /tmp/verify/watchdog.log
+            echo "--- end watchdog log ---"
+          fi
+
+          PRE=/tmp/verify/pre.pids
+          [ -f "$PRE" ] || { echo "no pre-snapshot — skipping cleanup"; exit 0; }
+          : > /tmp/verify/post.pids
+          for pat in 'mempalace.mcp_server' 'chrome-devtools-mcp' '@modelcontextprotocol/server-puppeteer' '\.cache/ms-playwright/.*chromium' 'playwright.*chromium'; do
+            pgrep -f "$pat" >> /tmp/verify/post.pids || true
+          done
+          sort -u /tmp/verify/post.pids -o /tmp/verify/post.pids
+          comm -13 "$PRE" /tmp/verify/post.pids > /tmp/verify/spawned.pids
+          if [ -s /tmp/verify/spawned.pids ]; then
+            echo "killing pids spawned during this run:"
+            xargs ps -o pid,command -p < /tmp/verify/spawned.pids || true
+            xargs kill -TERM < /tmp/verify/spawned.pids || true
+            sleep 2
+            xargs kill -KILL < /tmp/verify/spawned.pids 2>/dev/null || true
+          else
+            echo "no new MCP / browser PIDs to clean up"
+          fi
+
+      - name: Tear down local stack
+        if: always()
+        run: bash scripts/verify-stack-down.sh
+
+      - name: Transition labels on success (terminal stage)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          gh api -X DELETE repos/${{ github.repository }}/issues/$NUM/labels/harnext:verify || true
+      - name: Park on needs-judgment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          gh api -X DELETE repos/${{ github.repository }}/issues/$NUM/labels/harnext:verify || true
+          gh api -X POST repos/${{ github.repository }}/issues/$NUM/labels -f labels[]=harnext:needs-judgment

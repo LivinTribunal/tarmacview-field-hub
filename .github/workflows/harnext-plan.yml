@@ -1,0 +1,78 @@
+name: harnext plan
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue or PR number to run this stage on'
+        required: true
+        type: string
+
+jobs:
+  claude:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'harnext:plan'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
+    concurrency:
+      group: harnext-plan-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the plan stage for issue/PR #${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}. Do not change any code.
+
+            Read the issue (`gh issue view ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`) and the relevant spec: ALWAYS `docs/specs/SPEC.md`; `docs/specs/WIREFRAME.md` for any frontend page; `docs/specs/CHAPTER3-SYSTEM-DESIGN.md` for architecture questions. Inspect the actual files you intend to touch — don't guess paths.
+
+            Post ONE comment with `gh issue comment ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --body-file <file>` containing:
+            1. **Summary** — 2–4 lines on the user-visible behavior change.
+            2. **Files to change** — concrete paths under `backend/app/{routes,services,models,schemas}` and/or `frontend/src/{pages,components,api,types,i18n}`. Note any Alembic migration in `backend/migrations/versions/`.
+            3. **Approach** — DDD-lite: business logic on model methods, services for DB/HTTP, routes HTTP-only; new primitives → value objects in `backend/app/models/value_objects.py`. Frontend: i18n via `t()`, types in `src/types/{domain}.ts`, design tokens `--tv-*`.
+            4. **Risks** — call out T3 paths, protected files, schema migrations, breaking API changes.
+            5. **Test plan** — backend `pytest` files in `backend/tests/`, frontend co-located `*.test.tsx` with Vitest+RTL. Name specific cases.
+
+            Keep it tight (~25 lines). One comment, no labels, no branch.
+          claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 200 --allowedTools "Read,Glob,Grep,Bash"'
+          allowed_bots: 'github-actions'
+
+      - name: Transition labels on success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          gh api -X DELETE repos/${{ github.repository }}/issues/$NUM/labels/harnext:plan || true
+          gh label create harnext:implement --color ededed --description "harnext implement stage" 2>/dev/null || true
+          gh api -X POST repos/${{ github.repository }}/issues/$NUM/labels \
+            -f labels[]=harnext:implement
+          gh workflow run harnext-implement.yml \
+            --field issue_number=$NUM || true
+
+      - name: Park on needs-judgment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          gh api -X DELETE repos/${{ github.repository }}/issues/$NUM/labels/harnext:plan || true
+          gh label create harnext:needs-judgment --color b60205 --description "harnext stage needs human judgment" 2>/dev/null || true
+          gh api -X POST repos/${{ github.repository }}/issues/$NUM/labels \
+            -f labels[]=harnext:needs-judgment

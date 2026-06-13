@@ -1,0 +1,302 @@
+name: Harnext Gap
+# Gap-evaluation stage between implement and review. Compares the linked
+# issue's acceptance criteria against the PR diff and either advances to
+# review or dispatches the bridge fixer. Iteration counter lives on
+# `harnext:gap-bridge-iter-N` labels, mirroring the review loop.
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'PR number to run this stage on'
+        required: true
+        type: string
+
+jobs:
+  claude:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'harnext:gap'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
+    concurrency:
+      group: harnext-gap-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve PR + linked issue + iter
+        id: ctx
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          BODY=$(gh pr view "$NUM" --json body --jq '.body // ""')
+          LINKED=$(printf '%s' "$BODY" \
+            | grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+            | head -n1 | grep -oE '[0-9]+$' || echo "")
+          echo "pr=$NUM" >> "$GITHUB_OUTPUT"
+          echo "linked=$LINKED" >> "$GITHUB_OUTPUT"
+
+          LABELS=$(gh api "repos/${{ github.repository }}/issues/$NUM/labels" --jq '.[].name' || echo "")
+          ITER=$(printf '%s\n' "$LABELS" | grep -oE '^harnext:gap-bridge-iter-[0-9]+$' | head -n1 | grep -oE '[0-9]+$' || echo "")
+          # iter = number of bridge runs already completed; first gap eval before any bridge is 0
+          if [ -z "$ITER" ]; then ITER=0; fi
+          echo "iter=$ITER" >> "$GITHUB_OUTPUT"
+
+      - name: Skip — no linked issue, advance to review
+        if: steps.ctx.outputs.linked == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ steps.ctx.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$NUM" --body "$(cat <<'EOF'
+          <!-- harness-review: gap-agent -->
+          <!-- gap-verdict: SKIPPED -->
+
+          ## Gap analysis — skipped
+
+          No linked issue found in the PR description (no `Closes #N` / `Fixes #N` reference). Dispatching review stage directly.
+          EOF
+          )"
+          for n in 1 2 3; do
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap-bridge-iter-$n" || true
+          done
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap" || true
+          gh label create harnext:review --color ededed --description "harnext review stage" 2>/dev/null || true
+          gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:review"
+          gh workflow run "harnext-review.yml" --field issue_number="$NUM" || true
+
+      - name: Fetch issue + diff
+        if: steps.ctx.outputs.linked != ''
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUM: ${{ steps.ctx.outputs.linked }}
+          PR_NUM: ${{ steps.ctx.outputs.pr }}
+        run: |
+          set -euo pipefail
+          ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --json title,body \
+            --jq '"# " + .title + "\n\n" + (.body // "")')
+          {
+            echo "issue<<ISSUE_EOF"
+            echo "$ISSUE_BODY"
+            echo "ISSUE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # truncate diff to ~60KB to fit prompt budgets
+          # write through a tempfile so head closing the pipe early can't
+          # SIGPIPE gh under `set -o pipefail` on diffs larger than the cap
+          gh pr diff "$PR_NUM" > /tmp/pr-diff.patch
+          PR_DIFF=$(head -c 60000 /tmp/pr-diff.patch)
+          {
+            echo "diff<<DIFF_EOF"
+            echo "$PR_DIFF"
+            echo "DIFF_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build prompt
+        if: steps.ctx.outputs.linked != ''
+        id: prompt
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          ISSUE_BODY: ${{ steps.context.outputs.issue }}
+          PR_DIFF: ${{ steps.context.outputs.diff }}
+          PR_NUM: ${{ steps.ctx.outputs.pr }}
+          ISSUE_NUM: ${{ steps.ctx.outputs.linked }}
+          ITER: ${{ steps.ctx.outputs.iter }}
+        with:
+          script: |
+            const fs = require('fs');
+            const issueBody = process.env.ISSUE_BODY || '';
+            const prDiff = process.env.PR_DIFF || '';
+            const prNum = process.env.PR_NUM;
+            const issueNum = process.env.ISSUE_NUM;
+            const iter = process.env.ITER || '1';
+
+            let conventions = '';
+            try { conventions = fs.readFileSync('CLAUDE.md', 'utf-8').slice(0, 6000); } catch {}
+
+            const prompt = [
+              "You are the gap-evaluation agent. Compare the linked issue's acceptance criteria against the PR diff. Output must be terse — list ONLY the criteria that are not met. Do not list met criteria. Do not summarise the PR.",
+              '',
+              `PR #${prNum} vs issue #${issueNum}.`,
+              '',
+              '## Output format',
+              '',
+              'End your report with EXACTLY one verdict line on its own line. Do not write anything after it.',
+              '',
+              '- `VERDICT: CLEAN` — every acceptance criterion is met. Body above the verdict is empty (no bullets, no prose).',
+              '- `VERDICT: GAPS_NEEDS_FIX` — gaps remain that the bridge must fix. Body is a flat bullet list, one bullet per missing criterion, in this exact shape:',
+              '  `- <criterion verbatim from issue> — <path:line> — <one-sentence concrete fix the bridge can act on>`',
+              '- `VERDICT: GAPS_ACCEPTED` — gaps remain but are accepted as deferred. Body is a flat bullet list, one bullet per deferred criterion:',
+              '  `- <criterion verbatim from issue> — deferred — <substantive technical reason>`',
+              '',
+              'Hard rules:',
+              '- No summary sentence. No headings. No tables. No emojis. No first-person.',
+              '- Do not list met criteria. Silence = met.',
+              "- `path:line` should reference an actual file in the diff or repo when the criterion is location-specific; otherwise write `n/a` in that slot.",
+              '',
+              '## Override authority',
+              '',
+              'Mark a gap as `deferred` only when the PR description gives a substantive reason or you can articulate one. Otherwise mark as missing.',
+              '',
+              '## Issue',
+              '',
+              issueBody,
+              '',
+              '## PR diff (truncated to 60KB)',
+              '',
+              '```diff',
+              prDiff,
+              '```',
+              '',
+              '## Project conventions',
+              '',
+              conventions || '*No CLAUDE.md found.*',
+            ].join('\n');
+
+            core.setOutput('prompt', prompt);
+
+      - name: Run Claude (gap evaluator)
+        if: steps.ctx.outputs.linked != ''
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: ${{ steps.prompt.outputs.prompt }}
+          claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 200 --allowedTools "Read,Glob,Grep,Bash"'
+          allowed_bots: 'github-actions'
+
+      - name: Extract verdict
+        if: steps.ctx.outputs.linked != ''
+        id: report
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${EXECUTION_FILE:-}" || ! -f "$EXECUTION_FILE" ]]; then
+            {
+              echo "report<<REPORT_EOF"
+              echo "*Gap evaluator did not produce a report — defaulting to GAPS_NEEDS_FIX.*"
+              echo "REPORT_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "verdict=GAPS_NEEDS_FIX" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          REPORT=$(jq -r '[.[] | select(.type == "result")] | last | .result // ""' "$EXECUTION_FILE" 2>/dev/null || echo "")
+          if [[ -z "$REPORT" || "$REPORT" == "null" ]]; then
+            REPORT=$(jq -r '[.[] | select(.type == "assistant") | .message.content[] | select(.type == "text") | .text] | last // ""' "$EXECUTION_FILE" 2>/dev/null || echo "")
+          fi
+
+          # default verdict to GAPS_NEEDS_FIX when missing - fail-safe
+          VERDICT=$(echo "$REPORT" | grep -oE 'VERDICT:[[:space:]]*(CLEAN|GAPS_ACCEPTED|GAPS_NEEDS_FIX)' | tail -n1 \
+            | grep -oE '(CLEAN|GAPS_ACCEPTED|GAPS_NEEDS_FIX)' || echo "GAPS_NEEDS_FIX")
+
+          REPORT="${REPORT:0:8000}"
+          {
+            echo "report<<REPORT_EOF"
+            echo "$REPORT"
+            echo "REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT"
+
+      - name: Post verdict comment
+        if: steps.ctx.outputs.linked != ''
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUM: ${{ steps.ctx.outputs.pr }}
+          ISSUE_NUM: ${{ steps.ctx.outputs.linked }}
+          ITER: ${{ steps.ctx.outputs.iter }}
+          VERDICT: ${{ steps.report.outputs.verdict }}
+          REPORT: ${{ steps.report.outputs.report }}
+        with:
+          script: |
+            const prNum = parseInt(process.env.PR_NUM, 10);
+            const issueNum = process.env.ISSUE_NUM;
+            const iter = process.env.ITER || '1';
+            const verdict = process.env.VERDICT || 'GAPS_NEEDS_FIX';
+            const report = (process.env.REPORT || '*No report produced.*').trim();
+
+            const body = [
+              '<!-- harness-review: gap-agent -->',
+              `<!-- gap-verdict: ${verdict} -->`,
+              `<!-- gap-iter: ${iter}/3 -->`,
+              '',
+              `**Gap — issue #${issueNum}: ${verdict}**`,
+              '',
+              report,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNum,
+              body,
+            });
+
+      - name: Loop control (decide next step)
+        if: steps.ctx.outputs.linked != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ steps.ctx.outputs.pr }}
+          ITER: ${{ steps.ctx.outputs.iter }}
+          VERDICT: ${{ steps.report.outputs.verdict }}
+        run: |
+          set -euo pipefail
+
+          if [ "$VERDICT" = "CLEAN" ] || [ "$VERDICT" = "GAPS_ACCEPTED" ]; then
+            for n in 1 2 3; do
+              gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap-bridge-iter-$n" || true
+            done
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap" || true
+            gh label create harnext:review --color ededed --description "harnext review stage" 2>/dev/null || true
+            gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:review"
+            gh workflow run "harnext-review.yml" --field issue_number="$NUM" || true
+            exit 0
+          fi
+
+          # GAPS_NEEDS_FIX path
+          if [ "$ITER" -lt 3 ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap-bridge-iter-$ITER" || true
+            next=$((ITER + 1))
+            gh label create "harnext:gap-bridge-iter-$next" --color ededed --description "gap bridge iteration counter" 2>/dev/null || true
+            gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:gap-bridge-iter-$next"
+            gh workflow run "harnext-gap-bridge.yml" --field issue_number="$NUM"
+            exit 0
+          fi
+
+          # iteration cap reached - park
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap-bridge-iter-$ITER" || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap" || true
+          gh label create harnext:needs-judgment --color b60205 --description "needs human judgment" 2>/dev/null || true
+          gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:needs-judgment"
+
+      - name: Park on needs-judgment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || inputs.issue_number }}
+        run: |
+          labels=$(gh api "repos/${{ github.repository }}/issues/$NUM/labels" --jq '.[].name' || echo "")
+          iter=$(printf '%s\n' "$labels" | grep -oE '^harnext:gap-bridge-iter-[0-9]+$' | head -n1 | grep -oE '[0-9]+$' || echo "")
+          if [ -n "$iter" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap-bridge-iter-$iter" || true
+          fi
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$NUM/labels/harnext:gap" || true
+          gh api -X POST "repos/${{ github.repository }}/issues/$NUM/labels" -f labels[]="harnext:needs-judgment"

@@ -1,0 +1,86 @@
+# harnext tagger — bootstraps new issues into the pipeline.
+# Applies harnext:triage to issues that:
+#   1. are not already carrying any harnext:* label
+#   2. match the configured filter (label = harnext:start)
+# Regenerate via the harnext setup wizard; hand-edits survive re-runs only
+# when the setup wizard's first stage stays on github-actions.
+name: harnext-tagger
+
+on:
+  issues:
+    types: [opened, reopened, labeled, assigned]
+
+concurrency:
+  group: harnext-tagger-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  tag-new-issue:
+    if: ${{ !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: write
+    steps:
+      - name: Skip if the issue is already in the harnext pipeline
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          labels=$(gh issue view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json labels --jq '.labels[].name')
+          # Any stage label means a human (or earlier tick) already
+          # claimed this issue for harnext. Control labels
+          # (harnext:awaiting-approval / harnext:needs-judgment) also
+          # mean "waiting on a human, don't re-label."
+          # Exclude harnext:start - it's the gate that *triggers* the
+          # pipeline, not a stage label that means "already running."
+          if printf '%s\n' "$labels" | grep -E '^harnext:' | grep -qvx 'harnext:start'; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "already=false" >> "$GITHUB_OUTPUT"
+
+      - name: Apply filter
+        if: steps.gate.outputs.already == 'false'
+        id: filter
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          labels=$(gh issue view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json labels --jq '.labels[].name')
+          if printf '%s\n' "$labels" | grep -qx "harnext:start"; then
+            echo "matches=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "matches=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply first-stage label
+        if: steps.filter.outputs.matches == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh issue edit "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --add-label "harnext:triage"
+
+      - name: Dispatch first-stage workflow
+        if: steps.filter.outputs.matches == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Label-add via GITHUB_TOKEN does not fire `issues.labeled`,
+          # so the first stage's workflow will not auto-trigger from
+          # the label alone. Dispatch it explicitly via workflow_dispatch.
+          # Pass --ref so gh doesn't query the default branch via
+          # GraphQL (would require contents:read, which this job omits).
+          gh workflow run "harnext-triage.yml" \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.event.repository.default_branch }}" \
+            --field issue_number="${{ github.event.issue.number }}"
