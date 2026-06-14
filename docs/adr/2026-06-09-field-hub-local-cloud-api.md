@@ -1,5 +1,12 @@
 # 2026-06-09 — Field Hub: local DJI Cloud API gateway for mission dispatch and media return
 
+> The deployment/topology notes below (co-location only, browser straight to the
+> backend) are partially superseded by
+> `2026-06-14-tarmacview-fieldhub-integration-topology.md` — browser-bridge for
+> the connected case, deferred pre-trip sync, and no cloud↔LAN tunnel. The core
+> decision here — a local Cloud API gateway running alongside Pilot 2 — still
+> stands.
+
 ## Context
 
 Today the mission KMZ reaches the DJI controller by hand (file copy + manual
