@@ -48,12 +48,14 @@
     color: #ffffff;
   }
   button:disabled, input:disabled { opacity: 0.45; }
-  #switch-account {
+  #session { display: grid; gap: 12px; margin: 0 0 24px; }
+  #session-user { margin: 0; font-size: 24px; color: #93a1b3; }
+  #session-user b { color: #43c272; font-weight: 600; }
+  #disconnect {
     background: transparent;
-    color: #93a1b3;
-    border: 1px solid #3a4757;
+    color: #e8a0a0;
+    border: 1px solid #5a3a3a;
     font-size: 18px;
-    margin: 0 0 24px;
   }
   #status-panel { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
   #status-panel li {
@@ -100,10 +102,13 @@
     <label>Password
       <input id="password" type="password" autocomplete="current-password" disabled>
     </label>
-    <button id="login-button" type="submit" disabled>Log in</button>
+    <button id="login-button" type="submit" disabled>Connect</button>
   </form>
 
-  <button id="switch-account" type="button" hidden>Use a different account</button>
+  <div id="session" hidden>
+    <p id="session-user">Connected as <b id="session-name"></b></p>
+    <button id="disconnect" type="button">Disconnect</button>
+  </div>
 
   <ul id="status-panel">
     <li id="status-license" data-state="pending">
@@ -140,7 +145,9 @@
   var passwordInput = document.getElementById("password");
   var loginButton = document.getElementById("login-button");
   var errorLine = document.getElementById("error-line");
-  var switchAccount = document.getElementById("switch-account");
+  var sessionBlock = document.getElementById("session");
+  var sessionName = document.getElementById("session-name");
+  var disconnectButton = document.getElementById("disconnect");
 
   // cache the access token so a webview reload (e.g. returning from the route
   // library) resumes the session instead of forcing a re-login. lan-only
@@ -186,9 +193,9 @@
     return;
   }
 
-  // clear the cached token and start over with a fresh login
-  switchAccount.addEventListener("click", function () {
-    clearToken();
+  // disconnect - unload the cloud modules, drop the cached token, back to the form
+  disconnectButton.addEventListener("click", function () {
+    connect.disconnect({ bridge: window.djiBridge, clearToken: clearToken });
     window.location.reload();
   });
 
@@ -234,7 +241,8 @@
     }).then(function (result) {
       if (result.completed) {
         form.hidden = true;
-        switchAccount.hidden = false;
+        sessionName.textContent = result.username || "operator";
+        sessionBlock.hidden = false;
       } else {
         setFormEnabled(true);
       }

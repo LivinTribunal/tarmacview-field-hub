@@ -192,6 +192,17 @@ def test_flow_resume_falls_back_when_token_stale():
 
 
 @requires_node
+def test_disconnect_unloads_modules_and_clears_token():
+    """disconnect unloads the loaded components (reverse order) and drops the token."""
+    report = _run_flow("disconnect")
+
+    unloaded = [c["args"][0] for c in report["calls"] if c["method"] == "platformUnloadComponent"]
+    assert unloaded == ["mission", "media", "thing", "api"]
+    assert report["tokenOps"] == [{"op": "clear"}]
+    assert report["cachedToken"] is None
+
+
+@requires_node
 def test_flow_mqtt_callback_updates_state():
     """the registered thing callback drives the mqtt row in both directions."""
     report = _run_flow("happy")

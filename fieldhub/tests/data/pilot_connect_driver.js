@@ -65,6 +65,7 @@ function makeBridge(events, calls, overrides) {
     ),
     platformSetWorkspaceId: method("platformSetWorkspaceId", true),
     platformSetInformation: method("platformSetInformation", undefined),
+    platformUnloadComponent: method("platformUnloadComponent", true),
     thingGetConnectState: method("thingGetConnectState", false),
   };
 }
@@ -98,6 +99,20 @@ async function run(scenario) {
   const fetches = [];
   const statuses = [];
   const registered = {};
+
+  // disconnect is a standalone action (button click), not part of the flow
+  if (scenario === "disconnect") {
+    const store = { token: "cached-token" };
+    const ops = [];
+    connect.disconnect({
+      bridge: makeBridge(events, calls, {}),
+      clearToken: () => {
+        store.token = null;
+        ops.push({ op: "clear" });
+      },
+    });
+    return { scenario, calls, tokenOps: ops, cachedToken: store.token };
+  }
 
   const overrides = {};
   const envelopes = {

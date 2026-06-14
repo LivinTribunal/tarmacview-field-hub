@@ -304,11 +304,36 @@
     return result;
   }
 
+  // modules runConnectFlow loads, in load order
+  var LOADED_MODULES = ["api", "thing", "media", "mission"];
+
+  function disconnect(deps) {
+    // tear down the cloud link - unload the loaded components (reverse load
+    // order) so pilot drops the platform connection, and clear the cached
+    // token so the next load starts at the connect form. deps: {bridge,
+    // clearToken?}
+    var bridge = deps.bridge;
+    if (bridge && typeof bridge.platformUnloadComponent === "function") {
+      LOADED_MODULES.slice()
+        .reverse()
+        .forEach(function (name) {
+          try {
+            bridge.platformUnloadComponent(name);
+          } catch (err) {
+            // best effort - keep unloading the rest
+          }
+        });
+    }
+    if (deps.clearToken) deps.clearToken();
+  }
+
   return {
     BROWSER_MODE_MESSAGE: BROWSER_MODE_MESSAGE,
     THING_CALLBACK_NAME: THING_CALLBACK_NAME,
     MEDIA_PARAMS: MEDIA_PARAMS,
+    LOADED_MODULES: LOADED_MODULES,
     parseBridgeReturn: parseBridgeReturn,
     runConnectFlow: runConnectFlow,
+    disconnect: disconnect,
   };
 });
