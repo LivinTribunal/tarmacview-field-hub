@@ -33,6 +33,7 @@
   var STEP_API = "api";
   var STEP_MQTT = "mqtt";
   var STEP_MEDIA = "media";
+  var STEP_MISSION = "mission";
 
   function parseBridgeReturn(raw) {
     // bridge returns are bool-ish or json {code, message, data} envelopes
@@ -130,8 +131,8 @@
   }
 
   async function runConnectFlow(deps) {
-    // license verify -> login -> api -> thing (+ workspace identity) -> media;
-    // each step gates the next, the first failure stops the flow with a
+    // license verify -> login -> api -> thing (+ workspace identity) -> media
+    // -> mission; each step gates the next, the first failure stops with a
     // visible error. deps: {bridge, fetchFn, apiHost, onStatus,
     // registerCallback, getCredentials}
     var bridge = deps.bridge;
@@ -267,6 +268,15 @@
       return fail(STEP_MEDIA, "media module: " + (media.message || "load failed"));
     }
     onStatus(STEP_MEDIA, "ok", "auto-upload on (originals + video)");
+
+    // mission module - the wayline/route library cloud sync. params empty; the
+    // http host + token come from the api module (demo loadComponent('mission', {})).
+    // without it pilot's flight route library never queries the wayline endpoint.
+    var mission = callBridge(bridge, "platformLoadComponent", "mission", JSON.stringify({}));
+    if (!mission.ok) {
+      return fail(STEP_MISSION, "mission module: " + (mission.message || "load failed"));
+    }
+    onStatus(STEP_MISSION, "ok", "wayline sync enabled");
 
     result.completed = true;
     result.username = login.username;

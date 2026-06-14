@@ -294,6 +294,10 @@ panel):
    autoUploadPhotoType: 0, autoUploadVideo: true})` — originals (not
    thumbnails) + video auto-upload on, per the media-return design
    (`mediaSetAutoUploadVideo` is covered by the load param).
+9. `platformLoadComponent("mission", {})` — the wayline/route-library cloud
+   sync. Empty params; the HTTP host + token come from the `api` module.
+   **Required** — without it Pilot never queries `/wayline/...` and no cloud
+   routes appear (see below).
 
 Bridge return parsing (`parseBridgeReturn`): string returns are JSON
 `{code, message, data}` envelopes — `code: 0` = ok, `data` is sometimes a
@@ -305,12 +309,20 @@ Without `window.djiBridge` (plain browser) the page degrades to an "open
 this page in DJI Pilot 2" banner — also how the node-driven tests exercise
 the flow (`fieldhub/tests/test_pilot_page.py`).
 
-Not yet loaded: `mission`, `tsa`, `ws`. Pilot syncs the wayline list over
-HTTP (§3.2) via the `api` module; whether the route library additionally
-requires the `mission` component is ⚠ UNVERIFIED on hardware — add it to
-the sequence when the RC verdict lands. Parameter dictionary for the unused
-modules: demo `front_page/src/api/pilot-bridge.ts` (archived in the spike
-workspace).
+The `mission` component is **required and confirmed** (2026-06-14 BlueStacks
+run against `fieldhub`, §9): with only `api`/`thing`/`media` loaded Pilot's
+Flight Route Library stayed empty and never called `/wayline/...`; adding
+`platformLoadComponent("mission", {})` made the routes appear under a **Cloud**
+tab and Pilot then synced + downloaded over HTTP. It works **ungated by MQTT**
+(synced with the `thing` link disconnected) — the demo loads it inside the
+MQTT connect callback, but the wayline sync itself is pure HTTP via the `api`
+module. The demo's wayline list call carries `file_type=5` and
+`order_by=update_time desc` (the hub ignores `file_type` and still returns the
+route); `GET .../waylines/{id}/url` answers a **307** redirect the native
+`okhttp` client follows.
+
+Still not loaded: `tsa`, `ws`. Parameter dictionary for the unused modules:
+demo `front_page/src/api/pilot-bridge.ts` (archived in the spike workspace).
 
 ## 6. Device enums (product dictionary)
 
@@ -376,6 +388,30 @@ still need the real RC).
   Flight Route Library (M350 RTK / H20T) → **downloaded by Pilot** (`GET
   .../url` → 302 → object `HTTP 200`, valid `wpmz/template.kml` +
   `waylines.wpml`).
+
+### Confirmed — 2026-06-14, against `fieldhub` (not the demo)
+
+A second BlueStacks run pointed real Pilot 2 at the **`fieldhub` service** over
+plain HTTP (`emulator/` run-kit). This is the first time our own implementation
+met Pilot 2; the demo proved the protocol, this proves the code.
+
+- **Connect chain** end to end against fieldhub: license verify, login
+  (`flag` honored), `api`, `media` (issued STS to Pilot's media module), and
+  `mission`.
+- **Wayline sync (V2)** via the `mission` module (the missing piece, §5) — the
+  route appeared in Pilot's **Cloud** tab and synced over HTTP.
+- **KMZ download** — `GET .../url` → **307** → presigned `…/{id}.kmz` through
+  the nginx proxy → `HTTP 200`, validating the OSS split-horizon + SigV4-through-
+  proxy path with a real `okhttp` client.
+- **M4T end to end** — a real TarmacView **M4T** export (`droneEnumValue=99`,
+  `encoding='UTF-8'`) registered, synced, downloaded (3817 B), and **opened in
+  Pilot with waypoints**. Real Pilot 2 accepts the M4-series enum the demo
+  v1.10 dictionary rejected.
+
+Still hardware-only (RC Plus 2): MQTT device-online/topology (the `thing` link
+stayed disconnected in emulation and wayline sync did not need it), media
+upload (V3), STS via Pilot's real S3 upload (V4), TLS acceptance (V5), and the
+RC Plus 2 topology key (§6).
 
 ### Protocol constraints the implementation must honor
 1. **KMZ import is strict** (demo `WaylineFileServiceImpl.validKmzFile`; real
