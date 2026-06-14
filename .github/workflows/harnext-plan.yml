@@ -40,14 +40,14 @@ jobs:
           prompt: |
             You are the plan stage for issue/PR #${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}. Do not change any code.
 
-            Read the issue (`gh issue view ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`) and the relevant spec: ALWAYS `docs/specs/SPEC.md`; `docs/specs/WIREFRAME.md` for any frontend page; `docs/specs/CHAPTER3-SYSTEM-DESIGN.md` for architecture questions. Inspect the actual files you intend to touch — don't guess paths.
+            Read the issue (`gh issue view ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`) and the relevant spec: ALWAYS `docs/specs/FIELD-HUB.md`; `docs/specs/dji-cloud-api-reference.md` for protocol/endpoint details; `docs/specs/dji-wpml-reference.md` for KMZ/wayline structure. Inspect the actual files you intend to touch — don't guess paths.
 
             Post ONE comment with `gh issue comment ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --body-file <file>` containing:
             1. **Summary** — 2–4 lines on the user-visible behavior change.
-            2. **Files to change** — concrete paths under `backend/app/{routes,services,models,schemas}` and/or `frontend/src/{pages,components,api,types,i18n}`. Note any Alembic migration in `backend/migrations/versions/`.
-            3. **Approach** — DDD-lite: business logic on model methods, services for DB/HTTP, routes HTTP-only; new primitives → value objects in `backend/app/models/value_objects.py`. Frontend: i18n via `t()`, types in `src/types/{domain}.ts`, design tokens `--tv-*`.
+            2. **Files to change** — concrete paths under `fieldhub/app/{api/routes,services,models,schemas,core}`.
+            3. **Approach** — business logic on model methods/services, routes HTTP-only; device-facing responses follow the envelope shapes in `docs/specs/dji-cloud-api-reference.md`.
             4. **Risks** — call out T3 paths, protected files, schema migrations, breaking API changes.
-            5. **Test plan** — backend `pytest` files in `backend/tests/`, frontend co-located `*.test.tsx` with Vitest+RTL. Name specific cases.
+            5. **Test plan** — `pytest` files in `fieldhub/tests/`. Name specific cases.
 
             Keep it tight (~25 lines). One comment, no labels, no branch.
           claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 200 --allowedTools "Read,Glob,Grep,Bash"'

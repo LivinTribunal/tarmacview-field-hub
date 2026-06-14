@@ -53,26 +53,20 @@ jobs:
 
             Workflow:
             1. `git checkout -b issue/<num>-<slug>` from `main`.
-            2. Read `docs/specs/SPEC.md` and `docs/specs/WIREFRAME.md` if the issue touches features or UI. Read existing code before editing — match conventions.
-            3. Implement under `backend/app/...` and/or `frontend/src/...`. Rules:
-               - Routes are HTTP-only; logic lives on model methods or services.
+            2. Read `docs/specs/FIELD-HUB.md` and `docs/specs/dji-cloud-api-reference.md` if the issue touches the hub protocol or flows. Read existing code before editing — match conventions.
+            3. Implement under `fieldhub/app/...`. Rules:
+               - Routes (`fieldhub/app/api/routes/`) are HTTP-only; logic lives on model methods or services.
                - Routes never import models directly.
                - Every Python function/class gets a one-line lowercase docstring.
-               - Pydantic DTOs: `{Entity}Response|Create|Update`. Routes under `/api/v1/{resource}`.
-               - SQLAlchemy: UUID PKs (`Column(UUID, primary_key=True, default=uuid4)`); geometry via GeoAlchemy2 `Geometry("POINTZ", srid=4326)` for all coordinates.
-               - Pytest: async tests use `asyncio_mode = "auto"` (configured in `pyproject.toml`).
-               - Frontend strings go through `react-i18next` `t()`; types in `src/types/{domain}.ts`; styling via `--tv-*` tokens.
+               - Pydantic v2 DTOs; device-facing responses follow the envelope shapes in `docs/specs/dji-cloud-api-reference.md`.
+               - SQLAlchemy device registry persists in its own `fieldhub` postgres schema; tests use sqlite via `FIELDHUB_DATABASE_URL=sqlite://`.
+               - Pytest: async tests use `asyncio_mode = "auto"` (configured in `fieldhub/pyproject.toml`).
                - Comments: sparse, lowercase, no thesis references.
-               - Do NOT modify protected files: `.github/workflows/**`, `harness.config.json`, `backend/requirements.txt`, `frontend/package-lock.json`.
-            4. Add/update tests: backend `backend/tests/test_*.py` (pytest), frontend `*.test.tsx` (Vitest+RTL). T3 paths (`**/trajectory*`, `**/safety_validator*`, `**/flight_plan*`, `**/migrations/versions/*`) need extra coverage.
-            5. Migrations — never hand-write migration files:
-               - Generate: `cd backend && alembic revision --autogenerate -m "short description"`.
-               - Review the generated file — autogenerate misses renames. Edit `upgrade()`/`downgrade()` if needed, but never change the revision id.
-               - If alembic reports multiple heads: `cd backend && alembic merge heads -m "merge migration heads"`.
-               - Run `bash scripts/check-migrations.sh` after creating migrations to catch issues early.
+               - Do NOT modify protected files: `.github/workflows/**`, `harness.config.json`, `fieldhub/requirements.txt`.
+            4. Add/update tests under `fieldhub/tests/test_*.py` (pytest). T3 paths (`fieldhub/app/core/security*`, `fieldhub/app/services/storage_service*`, `fieldhub/app/services/*media*`) need extra coverage.
+            5. No DB migrations — the hub creates its own schema/tables on startup; do not add alembic.
             6. Run locally before pushing:
-               - `cd backend && ruff check . && ruff format --check . && pytest`
-               - `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run && npm run build`
+               - `cd fieldhub && ruff check . && ruff format --check . && pytest`
             7. Git identity is set at the workflow level (Štefan Moravík) — do NOT run `git config user.name/user.email` yourself. Use conventional commit prefixes (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`, `ci:`); messages stay short, lowercase, casual.
             8. **Do NOT call `gh pr create`** — the workflow opens the PR in a follow-up step using the user's PAT so the PR is authored by Štefan, not the bot. Instead, push the branch and write the PR title and body to disk:
                ```

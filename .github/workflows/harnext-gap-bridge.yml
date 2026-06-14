@@ -50,10 +50,9 @@ jobs:
 
             1. `gh pr checkout ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}` and `git pull`.
             2. Read the most recent gap-agent comment: `gh api repos/:owner/:repo/issues/${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}/comments --jq '[.[] | select(.body | contains("<!-- harness-review: gap-agent -->"))] | last | .body'`. Verdict will be `GAPS_NEEDS_FIX`. Each bullet in the body is one missing criterion in the shape `- <criterion> — <path:line> — <fix>`. Treat that bullet list as your full task list and address every item.
-            3. Edit only what the gap report demands. Do not refactor, rename, or add unrelated changes. Do not modify protected files (`.github/workflows/**`, `harness.config.json`, `backend/requirements.txt`, `frontend/package-lock.json`).
+            3. Edit only what the gap report demands. Do not refactor, rename, or add unrelated changes. Do not modify protected files (`.github/workflows/**`, `harness.config.json`, `fieldhub/requirements.txt`).
             4. Re-run gates locally before pushing:
-               - `cd backend && ruff check . && ruff format --check . && pytest`
-               - `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run && npm run build`
+               - `cd fieldhub && ruff check . && ruff format --check . && pytest`
             5. Git identity is set at the workflow level (Štefan Moravík) — do NOT run `git config user.name/user.email` yourself. Use conventional commit prefixes (`fix:`, `feat:`, `refactor:`, `test:`, etc.); keep messages short, lowercase, casual. One logical change per commit. Push to the same branch.
             6. Reply once on the PR (`gh pr comment ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`) with a checklist mapping each addressed criterion → commit SHA. Do not edit prior comments.
           claude_args: '--model claude-opus-4-8 --effort xhigh --max-turns 500 --allowedTools "Read,Glob,Grep,Bash,Edit,Write"'

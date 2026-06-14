@@ -49,27 +49,24 @@ jobs:
             ## Part 1 — User-facing doc reconciliation
 
             Update human-readable docs to match the merged change:
-            - `docs/specs/SPEC.md` if domain model, enums, status machine, or trajectory rules changed.
-            - `docs/specs/WIREFRAME.md` if any frontend page gained/lost fields, interactions, or routes.
+            - `docs/specs/FIELD-HUB.md` if architecture, flows, build plan, or validation status changed.
+            - `docs/specs/dji-cloud-api-reference.md` if endpoints, MQTT topics, payloads, or device enums changed; `docs/specs/dji-wpml-reference.md` for KMZ/wayline structure.
             - `docs/conventions.md` if conventions actually shifted (rare).
             - Root `CLAUDE.md` ONLY if the user explicitly asked — it is protected by default.
             - Fix dead links and stale paths surfaced by `git grep` against current file locations.
 
-            Commit these as `docs: <short>` (e.g., `docs: update SPEC for inspection.heading_override`).
+            Commit these as `docs: <short>` (e.g., `docs: update reference for media fast-upload`).
 
             ## Part 2 — Agent-readability docs (per-package CLAUDE.md)
 
             Goal: every future agent run that works inside one of these packages auto-loads a short manual describing the package. Claude Code walks up from the working directory and includes every `CLAUDE.md` it finds in context — that is the entire delivery mechanism, do not rename or relocate these files.
 
             Eligible locations (only these — do NOT scatter `CLAUDE.md` elsewhere):
-            - `backend/app/services/CLAUDE.md`
-            - `backend/app/models/CLAUDE.md`
-            - `backend/app/api/routes/CLAUDE.md`
-            - `backend/app/schemas/CLAUDE.md`
-            - `frontend/src/components/map/CLAUDE.md`
-            - `frontend/src/contexts/CLAUDE.md`
-            - `frontend/src/hooks/CLAUDE.md`
-            - `frontend/src/api/CLAUDE.md`
+            - `fieldhub/app/services/CLAUDE.md`
+            - `fieldhub/app/models/CLAUDE.md`
+            - `fieldhub/app/api/routes/CLAUDE.md`
+            - `fieldhub/app/schemas/CLAUDE.md`
+            - `fieldhub/app/core/CLAUDE.md`
 
             For each eligible directory whose files appear in `/tmp/merged-files.txt`:
             1. If `CLAUDE.md` doesn't exist yet in that directory, create it.
@@ -78,7 +75,7 @@ jobs:
             Each per-package `CLAUDE.md` stays short (≤ 60 lines) and contains:
             - **Purpose** — one sentence on what the package does.
             - **Public API surface** — the symbols other packages import from this one. List `name → one-line summary`.
-            - **Invariants** — non-obvious rules a contributor must not violate (e.g., "Mission.transition_to() is the ONLY way to change status; direct assignment bypasses validation").
+            - **Invariants** — non-obvious rules a contributor must not violate (e.g., "media-event ingest is idempotent on fingerprint; never insert a duplicate row").
             - **Cross-package dependencies** — packages this one imports from, packages that import from this one (one-liners).
             - **Gotchas** — surprises future agents would benefit from knowing (regressions to DRAFT, idempotency requirements, retry semantics, etc.).
 
@@ -90,7 +87,7 @@ jobs:
             - Anything already obvious from the directory layout.
             - Thesis references or AI attribution.
 
-            Commit these as `docs(agent): <short>` (e.g., `docs(agent): refresh services manual for trajectory builder`). One commit per package directory.
+            Commit these as `docs(agent): <short>` (e.g., `docs(agent): refresh services manual for storage STS`). One commit per package directory.
 
             ## Output
 

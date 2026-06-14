@@ -4,7 +4,7 @@
   "detection": {
     "primaryLanguage": "Python",
     "framework": "FastAPI",
-    "packageManager": null,
+    "packageManager": "pip",
     "ciProvider": "GitHub Actions",
     "monorepo": false
   },
@@ -39,20 +39,15 @@
       "name": "medium",
       "description": "Business logic, features, refactors, and test changes",
       "patterns": [
-        "backend/app/**",
-        "frontend/src/**",
-        "backend/tests/**",
-        "frontend/src/**/*.test.*",
-        "backend/requirements.txt",
-        "frontend/package.json",
-        "docker-compose.yml",
-        "backend/pyproject.toml"
+        "fieldhub/app/**",
+        "fieldhub/tests/**",
+        "fieldhub/requirements.txt",
+        "fieldhub/pyproject.toml",
+        "docker-compose.yml"
       ],
       "requiredChecks": [
         "lint",
-        "type-check",
-        "test",
-        "build"
+        "test"
       ],
       "mergePolicy": {
         "minApprovals": 1,
@@ -67,20 +62,17 @@
     },
     "tier3": {
       "name": "high",
-      "description": "Core trajectory algorithm, safety validation, flight plan output, and database migrations",
+      "description": "STS/storage-credential issuing, JWT auth, device-facing protocol surfaces (wayline/media), and TLS cert tooling",
       "patterns": [
-        "**/trajectory*",
-        "**/safety_validator*",
-        "**/flight_plan*",
-        "**/migrations/versions/*"
+        "fieldhub/app/core/security*",
+        "fieldhub/app/services/storage_service*",
+        "fieldhub/app/services/*media*",
+        "fieldhub/app/api/routes/storage*",
+        "scripts/field-hub/**"
       ],
       "requiredChecks": [
         "lint",
-        "type-check",
         "test",
-        "build",
-        "structural-tests",
-        "harness-smoke",
         "manual-approval"
       ],
       "mergePolicy": {
@@ -97,10 +89,10 @@
     }
   },
   "commands": {
-    "test": "cd backend && pytest && cd ../frontend && npx vitest run",
-    "build": "cd frontend && npm run build",
-    "lint": "cd backend && ruff check . && ruff format --check . && cd ../frontend && npm run lint",
-    "typeCheck": "cd frontend && npx tsc --noEmit"
+    "test": "cd fieldhub && pytest",
+    "build": null,
+    "lint": "cd fieldhub && ruff check . && ruff format --check .",
+    "typeCheck": null
   },
   "shaDiscipline": {
     "enabled": true,
@@ -109,19 +101,19 @@
     "description": "All CI gates pin to exact commit SHA from the risk policy gate"
   },
   "architecturalBoundaries": {
-    "backend/app/api/routes": {
+    "fieldhub/app/api/routes": {
       "allowedImports": ["app.schemas", "app.services", "app.core"]
     },
-    "backend/app/schemas": {
+    "fieldhub/app/schemas": {
       "allowedImports": ["app.core"]
     },
-    "backend/app/services": {
-      "allowedImports": ["app.models", "app.schemas", "app.core", "app.utils"]
+    "fieldhub/app/services": {
+      "allowedImports": ["app.models", "app.schemas", "app.core"]
     },
-    "backend/app/models": {
+    "fieldhub/app/models": {
       "allowedImports": ["app.core"]
     },
-    "backend/app/core": {
+    "fieldhub/app/core": {
       "allowedImports": []
     }
   },
@@ -133,8 +125,7 @@
     "maxStaleDays": 14,
     "requireUpdateWithCodeChange": false,
     "exemptPatterns": [
-      "**/*.test.*",
-      "backend/tests/**",
+      "fieldhub/tests/**",
       "**/__pycache__/**"
     ]
   },
@@ -153,8 +144,7 @@
     ".github/workflows/**",
     "harness.config.json",
     "CLAUDE.md",
-    "backend/requirements.txt",
-    "frontend/package-lock.json"
+    "fieldhub/requirements.txt"
   ],
   "harnesses": [
     {

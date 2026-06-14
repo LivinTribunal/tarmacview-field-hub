@@ -41,14 +41,14 @@ jobs:
           prompt: |
             You are the triage stage. Do not change any code.
 
-            Read the issue body via `gh issue view ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --json title,body,labels,author`. Skim `CLAUDE.md`, `docs/specs/SPEC.md`, and `harness.config.json` only as needed to judge scope.
+            Read the issue body via `gh issue view ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --json title,body,labels,author`. Skim `CLAUDE.md`, `docs/specs/FIELD-HUB.md`, and `harness.config.json` only as needed to judge scope.
 
             Classify and post ONE comment with `gh issue comment ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }} --body @<file>` containing:
             - **Severity**: bug-critical | bug-normal | feature | chore | question
-            - **Scope**: backend | frontend | both | docs | infra (name the package paths: `backend/app/...`, `frontend/src/...`)
-            - **Risk tier**: T1 | T2 | T3 — flag T3 if it touches `**/trajectory*`, `**/safety_validator*`, `**/flight_plan*`, or `**/migrations/versions/*`
+            - **Scope**: service | docs | infra (name the paths: `fieldhub/app/...`)
+            - **Risk tier**: T1 | T2 | T3 — flag T3 if it touches `fieldhub/app/core/security*`, `fieldhub/app/services/storage_service*`, `fieldhub/app/services/*media*`, or `scripts/field-hub/**`
             - **Ready to plan?**: yes / no — say no only if the issue lacks a reproducible behavior or acceptance criteria, and list the missing inputs
-            - **Notes**: 1–3 lines flagging protected files (`.github/workflows/**`, `harness.config.json`, `CLAUDE.md`, `backend/requirements.txt`, `frontend/package-lock.json`) or spec docs the planner must read.
+            - **Notes**: 1–3 lines flagging protected files (`.github/workflows/**`, `harness.config.json`, `CLAUDE.md`, `fieldhub/requirements.txt`) or spec docs the planner must read.
 
             Do not add labels. Do not open a PR. Comment once and stop.
           claude_args: "--model claude-opus-4-8 --effort xhigh --max-turns 200 --allowedTools \"Read,Glob,Grep,Bash\""
