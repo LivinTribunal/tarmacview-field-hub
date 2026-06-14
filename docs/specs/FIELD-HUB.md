@@ -32,8 +32,10 @@ webview loads at the hub URL (`GET /`, plain HTML + vanilla JS under
 `GET /pilot/config` (DJI app credentials from `FIELDHUB_DJI_APP_ID` /
 `_APP_KEY` / `_APP_LICENSE`, the device-facing MQTT address, workspace
 identity); the JSBridge chain runs license verify → operator login →
-`api`/`thing`/`media` module loads with media auto-upload (originals +
-video) on. Call sequence + envelope-parsing rules:
+`api`/`thing`/`media`/`mission` module loads with media auto-upload
+(originals + video) on. The `mission` module (added in #6) is what makes
+Pilot query `/wayline` and surface cloud routes under its Cloud tab — without
+it the route library stays empty. Call sequence + envelope-parsing rules:
 `docs/specs/dji-cloud-api-reference.md` §5.
 Companion decision record:
 `docs/adr/2026-06-09-field-hub-local-cloud-api.md`.
@@ -325,9 +327,9 @@ for the sweep inside `GET /api/v1/drone-media` to retry.
 - Implements only the Pilot-feature-set modules we use: access/binding,
   device topology + online status, wayline library, media management (STS,
   fast-upload, callbacks), and the webview connect page (`GET /` +
-  `GET /pilot/config`) that bootstraps the JSBridge `api`/`thing`/`media`
-  modules. Livestream and TSA map elements are explicitly out of scope
-  for v1.
+  `GET /pilot/config`) that bootstraps the JSBridge
+  `api`/`thing`/`media`/`mission` modules. Livestream and TSA map elements
+  are explicitly out of scope for v1.
 - Persists its own small state (dispatch records, device registry) in the
   existing postgres instance, separate schema.
 
@@ -376,9 +378,12 @@ hand-off into the processing pipeline behind it stays a stub.*
 **Connection chain — Pilot 2 connect page.** Outside the original phase cut
 (the webview was out of scope at design time): the page Pilot 2 loads when
 its *Cloud Service* mode opens the hub URL, closing the chain license
-verify → login → module load → MQTT attach. *Done — merged in #831; call
-sequence + envelope-parsing rules in `docs/specs/dji-cloud-api-reference.md`
-§5. JSBridge behavior on real RC hardware is still unverified.*
+verify → login → module load → MQTT attach. *Done — merged in #831; the
+`mission` module load that makes Pilot sync the cloud route library landed
+in #6. Call sequence + envelope-parsing rules in
+`docs/specs/dji-cloud-api-reference.md` §5. A 2026-06-14 BlueStacks run drove
+real Pilot 2 against fieldhub (not the demo) and confirmed the chain end to
+end; JSBridge behavior on real RC hardware is still unverified.*
 
 **Phase 4 — polish (optional).** Results-page pull flow, multi-RC sessions,
 upload progress UI, retries/resume, JSBridge webview embedding of TarmacView
@@ -386,22 +391,28 @@ inside Pilot.
 
 ## 9. Validation checklist (Phase 0 exit criteria)
 
-**Phase 0 emulator status (BlueStacks spike, 2026-06-13).** Real DJI Pilot 2
-in BlueStacks against a live DJI Cloud API Demo stack confirmed the connect
-chain (V1, partial) and the **full V2 dispatch round-trip** (upload → library →
-Pilot download). V3/V4/V5 and the native-JSBridge / MQTT device-online paths
-are hardware-only — open on the RC Plus 2. The KMZ/OSS interop constraints the
-spike surfaced are in `dji-cloud-api-reference.md` §9.
+**Phase 0 emulator status (BlueStacks spike).** Real DJI Pilot 2 in BlueStacks
+confirmed the connect chain (V1, partial) and the **full V2 dispatch
+round-trip** (upload → library → Pilot download). The 2026-06-13 run validated
+the protocol against a live DJI Cloud API Demo stack; the 2026-06-14 run drove
+Pilot 2 against **fieldhub itself** (not the demo) — connect chain incl. the new
+`mission` module, wayline sync, KMZ download via presigned URL through the proxy
+(307 → 200), and a real TarmacView M4T export (`droneEnumValue=99`) opened in
+Pilot with waypoints. V3/V4/V5 and the native-JSBridge / MQTT device-online
+paths are hardware-only — open on the RC Plus 2. The KMZ/OSS interop constraints
+and the fieldhub-run results are in `dji-cloud-api-reference.md` §9; the runbook
+is `docs/emulator-validation.md`.
 
 - **V1 — offline binding**: confirm which provisioning steps need internet
   (DJI login, license check, org binding) and that a *provisioned* RC runs
   fully offline against the local hub across reboots and days. *Emulator:
-  login → workspace → authenticated API chain confirmed; offline persistence
-  across reboots still hardware-only.*
+  login → workspace → authenticated API chain confirmed (against fieldhub,
+  2026-06-14); offline persistence across reboots still hardware-only.*
 - **V2 — wayline sync direction + UX**: a wayline registered on the platform
   appears in Pilot 2's route list on RC Plus *and* RC Plus 2; note whether
   the list refreshes automatically or needs a manual pull-to-refresh.
-  *Emulator: full upload → library listing → Pilot download confirmed; the
+  *Emulator: full upload → library listing → Pilot download confirmed against
+  fieldhub (2026-06-14), gated on loading the `mission` JSBridge module; the
   native route-list refresh UX on real RC hardware still open.*
 - **V3 — video auto-upload**: with `mediaSetAutoUploadVideo` on, a recorded
   4K video uploads automatically after landing, original quality, reliably
