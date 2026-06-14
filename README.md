@@ -22,7 +22,11 @@ that's the cross-repo seam to keep in sync (see `docs/ROADMAP.md`).
 - `docs/specs/dji-cloud-api-reference.md` — protocol contract (endpoints, MQTT
   topic families, payload shapes, device enums); the implementation reference.
 - `docs/specs/dji-wpml-reference.md` — WPML/KMZ structure.
-- `docs/adr/2026-06-09-field-hub-local-cloud-api.md` — decision record.
+- `docs/adr/` — decision records: the field-hub gateway
+  (`2026-06-09-field-hub-local-cloud-api.md`) and the TarmacView⇄hub integration
+  topology (`2026-06-14-tarmacview-fieldhub-integration-topology.md`).
+- `docs/INTEGRATION-ROADMAP.md` — phased plan for how TarmacView connects to the
+  hub across deployments (offline-first; browser-bridge later).
 - `scripts/field-hub/gen-certs.sh` — local CA + per-service TLS cert tooling.
 - `docs/ROADMAP.md` — prioritized next steps + the cross-repo seam, written so
   agents can pick up handed-off tasks with the right context.

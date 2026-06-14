@@ -37,8 +37,10 @@ identity); the JSBridge chain runs license verify → operator login →
 Pilot query `/wayline` and surface cloud routes under its Cloud tab — without
 it the route library stays empty. Call sequence + envelope-parsing rules:
 `docs/specs/dji-cloud-api-reference.md` §5.
-Companion decision record:
-`docs/adr/2026-06-09-field-hub-local-cloud-api.md`.
+Companion decision records:
+`docs/adr/2026-06-09-field-hub-local-cloud-api.md` (the gateway) and
+`docs/adr/2026-06-14-tarmacview-fieldhub-integration-topology.md` (how TarmacView
+reaches the hub across deployments).
 
 ## 1. Goal
 
