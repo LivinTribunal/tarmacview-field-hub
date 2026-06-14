@@ -145,6 +145,11 @@ its route library:
   `encoding="UTF-8"`, drone/payload enums must be in the device dictionary
   (§6), and the wayline name (derived from the filename) must avoid
   `_ . / \ < > : " | ? *`. See §9 for the concrete failures the spike hit.
+- The hub defensively sanitizes the wayline name on register (the single
+  dispatch chokepoint): forbidden chars collapse to a space, an all-forbidden
+  name falls back to `wayline`, and `duplicate-names` normalizes its query the
+  same way so the collision check matches the stored form. The exporter still
+  emitting a clean filename (the monorepo half) stays the primary fix.
 - Pilot triggers the sync itself (pull). Refresh cadence / manual
   pull-to-refresh behavior in the route list UI ⚠ UNVERIFIED (V2).
 
@@ -348,7 +353,12 @@ crash binding).
 - **Addressing**: every URL/address handed to Pilot (platform URL,
   `mqtt_addr`, STS `endpoint`, presigned URLs) must use the laptop's static
   LAN IP on the travel router; compose-internal hostnames must never leak
-  into device-facing payloads.
+  into device-facing payloads. The hub single-sources this off
+  `FIELDHUB_PUBLIC_HOST` (the laptop's LAN IP) - `mqtt_addr`, the STS
+  `endpoint`, and presigned URLs all derive from it, with per-service
+  overrides kept for a reverse proxy. The startup log echoes the resolved
+  device-facing addresses and warns when one still resolves to a
+  compose/loopback host (`localhost`/`minio`/`emqx`/…).
 
 ## 8. Scope map for the implementation issues
 
