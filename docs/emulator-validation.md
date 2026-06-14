@@ -173,10 +173,13 @@ Validate (all confirmed 2026-06-14):
   (cert with a `10.0.2.2` SAN), have nginx terminate TLS on 8080 with it, and
   install the local CA inside BlueStacks. Adds the V5 trust step early.
 - **nginx single-port is fussy** → BlueStacks can also reach individual host
-  ports as `10.0.2.2:<port>`; as a fallback publish fieldhub `:8800` and MinIO
-  `:9000` directly and set `FIELDHUB_MINIO_DEVICE_ENDPOINT=http://10.0.2.2:9000`,
-  platform URL `http://10.0.2.2:8800`. The single nginx port is the spike-proven
-  default; this is the escape hatch.
+  ports as `10.0.2.2:<port>`. fieldhub no longer publishes a host port by default
+  (it is reached only through nginx on the compose network), so add a `ports:`
+  entry in `docker-compose.emulator.yml` to expose it directly. Pick a free port -
+  the field laptop already runs services on host 8000 and 8800, so avoid those.
+  Publish MinIO `:9000` too, set `FIELDHUB_MINIO_DEVICE_ENDPOINT=http://10.0.2.2:9000`,
+  and point the platform URL at the fieldhub port. The single nginx port is the
+  spike-proven default; this is the escape hatch.
 - **Bucket-name mismatch** → `nginx.conf` hardcodes `tarmacview-waylines` /
   `tarmacview-media`; keep the MinIO bucket settings at their defaults or update
   both.
