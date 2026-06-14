@@ -56,7 +56,13 @@ drone-mission-planning-module · `[both]` = cross-repo seam.
   `FIELDHUB_URL` + CA + the generated secret so there is **zero hand-editing**.
 - **1.3 Teardown + keep cert tooling in sync** `[hub]`: a stop/reset script;
   keep this repo's `gen-certs.sh` + the compose `field` reference aligned with
-  the monorepo's.
+  the monorepo's. ✅ `scripts/field-hub/stop-field.sh` (`down` by default,
+  `--wipe` drops the `emqx-data`/`minio-data`/`pgdata` volumes — note `pgdata`
+  is the *shared* postgres volume). **Stack alignment / intentional drift:** this
+  repo ships only the `fieldhub` build context; the `backend`/`frontend` contexts
+  in `docker-compose.yml` are monorepo-only references, so the `field` profile
+  here is fieldhub + EMQX + MinIO over the base postgres. `gen-certs.sh` is the
+  canonical cert tooling the monorepo launcher reuses.
 - *Done-when:* from a clean laptop, **one command** brings up the full offline
   stack with the backend reaching the hub and the hub ready for Pilot.
 
