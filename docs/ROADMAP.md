@@ -13,6 +13,10 @@ and **media back** (full-quality photos/videos → laptop after landing). Design
 `docs/specs/FIELD-HUB.md`. Protocol contract (the implementation source of
 truth): `docs/specs/dji-cloud-api-reference.md`. KMZ/WPML: `dji-wpml-reference.md`.
 
+For how the TarmacView app reaches the hub across deployment scenarios (offline
+docker, connected-field browser-bridge, office planning), see the companion
+`docs/INTEGRATION-ROADMAP.md`.
+
 **Status:** Phases 1–3 + the Pilot connect page are merged. A 2026-06-13
 BlueStacks spike confirmed the connect chain (V1 partial) and the full mission
 dispatch round-trip (V2) against the DJI demo; a 2026-06-14 run then drove real

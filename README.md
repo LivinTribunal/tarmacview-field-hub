@@ -26,6 +26,9 @@ that's the cross-repo seam to keep in sync (see `docs/ROADMAP.md`).
 - `scripts/field-hub/gen-certs.sh` — local CA + per-service TLS cert tooling.
 - `docs/ROADMAP.md` — prioritized next steps + the cross-repo seam, written so
   agents can pick up handed-off tasks with the right context.
+- `docs/INTEGRATION-ROADMAP.md` — phased plan for how the TarmacView app reaches
+  the hub across deployments (offline docker, connected-field browser-bridge);
+  companion to `docs/ROADMAP.md`.
 - `.github/workflows/` — the harnext automation pipeline + CI, **adapted for
   this repo** (fieldhub lint/test gates, fieldhub risk tiers). `harnext-verify`
   is disabled (no self-hosted runner here).
