@@ -25,8 +25,6 @@ that's the cross-repo seam to keep in sync (see `docs/ROADMAP.md`).
 - `docs/adr/` — decision records: the field-hub gateway
   (`2026-06-09-field-hub-local-cloud-api.md`) and the TarmacView⇄hub integration
   topology (`2026-06-14-tarmacview-fieldhub-integration-topology.md`).
-- `docs/INTEGRATION-ROADMAP.md` — phased plan for how TarmacView connects to the
-  hub across deployments (offline-first; browser-bridge later).
 - `scripts/field-hub/gen-certs.sh` — local CA + per-service TLS cert tooling.
 - `scripts/field-hub/stop-field.sh` — stop/reset the compose `field` profile
   (`--wipe` also drops the data volumes, including the shared `pgdata`).
