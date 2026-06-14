@@ -12,10 +12,13 @@ Python 3.12 + FastAPI. Device registry persists in its own `fieldhub` schema in
 the shared PostgreSQL instance. Runs as the `fieldhub` service in the docker
 compose `field` profile alongside EMQX (MQTT broker) and MinIO (S3 object store).
 
-This repo is a focused extract of the field-hub component; the backend/frontend
-integration surface (dispatch endpoint, drone-media APIs, ExportPanel UI) lives
-in the [drone-mission-planning-module](https://github.com/LivinTribunal/drone-mission-planning-module)
-monorepo.
+**This repo is the development home for the field hub service** — the `fieldhub/`
+gateway is built and evolved here and is canonical. The backend/frontend
+integration surface (the dispatch endpoint, `field-link`/`drone-media` APIs,
+ExportPanel UI) lives in the
+[drone-mission-planning-module](https://github.com/LivinTribunal/drone-mission-planning-module)
+monorepo — the cross-repo seam. When a change spans both (e.g. a new field-link
+field), note the monorepo side in the PR. See `docs/ROADMAP.md` for priorities.
 
 ## Build & Run Commands
 

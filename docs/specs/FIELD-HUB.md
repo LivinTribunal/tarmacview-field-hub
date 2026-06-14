@@ -386,12 +386,23 @@ inside Pilot.
 
 ## 9. Validation checklist (Phase 0 exit criteria)
 
+**Phase 0 emulator status (BlueStacks spike, 2026-06-13).** Real DJI Pilot 2
+in BlueStacks against a live DJI Cloud API Demo stack confirmed the connect
+chain (V1, partial) and the **full V2 dispatch round-trip** (upload → library →
+Pilot download). V3/V4/V5 and the native-JSBridge / MQTT device-online paths
+are hardware-only — open on the RC Plus 2. The KMZ/OSS interop constraints the
+spike surfaced are in `dji-cloud-api-reference.md` §9.
+
 - **V1 — offline binding**: confirm which provisioning steps need internet
   (DJI login, license check, org binding) and that a *provisioned* RC runs
-  fully offline against the local hub across reboots and days.
+  fully offline against the local hub across reboots and days. *Emulator:
+  login → workspace → authenticated API chain confirmed; offline persistence
+  across reboots still hardware-only.*
 - **V2 — wayline sync direction + UX**: a wayline registered on the platform
   appears in Pilot 2's route list on RC Plus *and* RC Plus 2; note whether
   the list refreshes automatically or needs a manual pull-to-refresh.
+  *Emulator: full upload → library listing → Pilot download confirmed; the
+  native route-list refresh UX on real RC hardware still open.*
 - **V3 — video auto-upload**: with `mediaSetAutoUploadVideo` on, a recorded
   4K video uploads automatically after landing, original quality, reliably
   for multi-GB files (resume behavior on WiFi drop).

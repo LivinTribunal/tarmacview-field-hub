@@ -9,10 +9,12 @@ inline here.
 **Provenance.** Extracted from the DJI Cloud API Demo v1.10 source (the
 reference implementation Pilot 2 ships against; archived locally in the
 `field-hub-spike/` workspace on the field laptop) and cross-checked against
-the public Cloud-API-Doc. A live demo stack validated the platform side.
-**Hardware verdicts are pending** — items marked ⚠ UNVERIFIED get confirmed
-or corrected on the real RC Plus 2 / RC Plus; deltas are folded back into
-this doc.
+the public Cloud-API-Doc. A live demo stack validated the platform side; a
+2026-06-13 **BlueStacks spike** then drove real DJI Pilot 2 against it,
+confirming the connect chain and the full wayline dispatch round-trip in
+emulation (§9). **Hardware verdicts are still pending** — items marked
+⚠ UNVERIFIED get confirmed or corrected on the real RC Plus 2 / RC Plus;
+deltas are folded back into this doc.
 
 Companion docs: architecture `FIELD-HUB.md` · KMZ/WPML payload format
 `dji-wpml-reference.md`.
@@ -139,6 +141,10 @@ its route library:
   UNVERIFIED whether Pilot enforces it; the demo computes it on upload.
 - The KMZ itself must contain `wpmz/template.kml` (+ `waylines.wpml`) — the
   TarmacView exporter already emits both (`dji-wpml-reference.md`).
+- **Import is strict** — `template.kml` must declare uppercase
+  `encoding="UTF-8"`, drone/payload enums must be in the device dictionary
+  (§6), and the wayline name (derived from the filename) must avoid
+  `_ . / \ < > : " | ? *`. See §9 for the concrete failures the spike hit.
 - Pilot triggers the sync itself (pull). Refresh cadence / manual
   pull-to-refresh behavior in the route list UI ⚠ UNVERIFIED (V2).
 
@@ -319,7 +325,7 @@ workspace).
 | Matrice 30 / 30T | `0-67-0` / `0-67-1` | from demo SQL |
 | DJI RC Plus | `2-119-0` | from demo SQL |
 | DJI RC Pro Enterprise | `2-144-0` | Cloud-API-Doc |
-| **Matrice 4T** | `0-99-1` ⚠ UNVERIFIED | derived from WPML `droneEnumValue` 99 sub 1 (matches the pattern: M350=89, M300=60, M3E=77 are identical in WPML and the device dictionary) |
+| **Matrice 4T** | `0-99-1` | WPML `droneEnumValue` 99 sub 1 **confirmed** from a TarmacView export (spike). Note: demo v1.10's dictionary predates the M4 series and *rejects* enum 99 — the hub must seed this key itself. RC-topology key still ⚠ pending hardware |
 | **DJI RC Plus 2** | ⚠ UNKNOWN | capture from the live `update_topo` payload when the hardware arrives (V1/V2) |
 
 These keys appear in `update_topo` payloads, wayline `drone_model_key`
@@ -353,7 +359,71 @@ crash binding).
 | media return | §3.3 (sts, fast-upload, tiny-fingerprints, upload-callback), §4 `storage_config_get` |
 | explicitly out of scope v1 | livestream, DRC live control, HMS, firmware/OTA, log upload, map elements, dock-only flight-task execution |
 
-## 9. Sources
+## 9. Phase 0 emulator validation (BlueStacks spike, 2026-06-13)
+
+DJI Pilot 2 running in BlueStacks (Android `SM-G998B`) was pointed at a live
+DJI Cloud API Demo v1.10 stack on the field laptop — a hardware-less precursor
+to the RC verdicts. This **confirms the protocol/connectivity chain and the
+full V2 dispatch round-trip**; it does *not* replace the on-hardware V1–V5
+verdicts (MQTT device-online, media upload, STS, TLS, and native JSBridge all
+still need the real RC).
+
+### Confirmed
+- **Connection chain (V1, partial).** Pilot 2 → platform login → workspace →
+  authenticated `/manage` API, end to end over the local network.
+- **Mission dispatch (V2), full round-trip.** A TarmacView mission KMZ →
+  uploaded to the wayline library → stored in MinIO → listed in Pilot 2's
+  Flight Route Library (M350 RTK / H20T) → **downloaded by Pilot** (`GET
+  .../url` → 302 → object `HTTP 200`, valid `wpmz/template.kml` +
+  `waylines.wpml`).
+
+### Protocol constraints the implementation must honor
+1. **KMZ import is strict** (demo `WaylineFileServiceImpl.validKmzFile`; real
+   DJI tooling is at least as strict):
+   - `template.kml` XML declaration must be **uppercase** `encoding="UTF-8"`.
+     lxml emits lowercase `utf-8` → rejected ("file encoding format is
+     incorrect"). The TarmacView exporter must emit uppercase.
+   - `wpml:droneEnumValue` / `payloadEnumValue` must be in the platform's
+     device dictionary (§6). A TarmacView M4-series export wrote
+     `droneEnumValue=99`, which demo v1.10 doesn't know → rejected; the hub's
+     dictionary must include every fleet model (M4T = `0-99-1`).
+   - The wayline **name** (derived from the KMZ filename) cannot contain
+     `_ . / \ < > : " | ? *` — an underscore broke the *list* endpoint for
+     every wayline. Sanitize dispatched filenames.
+2. **OSS split-horizon (the §3.1 / §3.3 / §7 addressing rule, made concrete).**
+   The server reaches MinIO over the compose network (`minio:9000`); the
+   device reaches it only over the LAN — no single literal address serves
+   both. The hub must (a) issue presigned URLs / the STS `endpoint` with the
+   **device-reachable** host, and (b) reach MinIO for its own put/stat over
+   the **internal** address. Generating a presigned URL is pure local
+   computation (no MinIO round-trip), so the device-facing host is set
+   independently of where the server connects. SigV4 is computed over the
+   signed `Host` header, so a reverse proxy in front of MinIO works only if it
+   forwards that header **verbatim**.
+3. **Pilot webview refuses non-`http(s)` schemes.** The demo web console's
+   "Download" button fetches the file as a blob then triggers a `blob:`
+   object-URL save, which Pilot rejects ("Only URL starting with http or https
+   supported"). Anything the hub's own connect page hands Pilot for
+   navigation/download must be a plain `http(s)` URL, never `blob:`/`data:`.
+
+### Emulator-specific (testing only — not a hardware truth)
+- **BlueStacks reaches the host only via the emulator alias `10.0.2.2`**
+  (→ host loopback), never the host LAN IP — TCP to the LAN IP hairpins even
+  though ICMP pings. A real RC on WiFi hits the laptop's LAN IP as a normal
+  external client, so this is a BlueStacks artifact. For emulator testing,
+  wire every device-facing address to `10.0.2.2` and route the API **and**
+  MinIO through one reachable port (e.g. an nginx reverse proxy on `:8080`).
+- **The demo web login form sends `flag=1`** (Web account) because BlueStacks'
+  Pilot doesn't expose the native `window.djiBridge`; use the Web-type account
+  there. On a real RC the native bridge runs and the connect page's operator
+  login uses `flag=2` (§5 step 3) — an emulator login note, not a contract
+  change.
+- The demo runs on Apple Silicon with the **arm64 EMQX image** (amd64
+  segfaults under emulation); MinIO is the object store.
+
+Full run log: monorepo issue #812.
+
+## 10. Sources
 
 - DJI Cloud API Demo v1.10 source (sample + cloud-sdk modules) — archived
   in the spike workspace on the field laptop; the structures named above
