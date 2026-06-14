@@ -30,9 +30,13 @@ services:
       # http://localhost:8080 for a host-side smoke test (no emulator).
       FIELDHUB_MINIO_DEVICE_ENDPOINT: ${FIELDHUB_MINIO_DEVICE_ENDPOINT:-http://10.0.2.2:8080}
       FIELDHUB_MQTT_DEVICE_ADDR: ${FIELDHUB_MQTT_DEVICE_ADDR:-tcp://10.0.2.2:1883}
-      # mqtt device-online needs the native bridge (absent in BlueStacks) - the
-      # hub-side listener stays off so the stack needs no TLS material at all
-      FIELDHUB_MQTT_ENABLED: "false"
+      # plain-mqtt broker (no TLS) so pilot's thing module connects - the demo
+      # gates the mission/wayline module behind a live mqtt link, so a reachable
+      # broker is needed for the route library to sync
+      FIELDHUB_MQTT_ENABLED: "true"
+      FIELDHUB_MQTT_HOST: emqx
+      FIELDHUB_MQTT_PORT: "1883"
+      FIELDHUB_MQTT_TLS: "false"
       # registry in a throwaway sqlite file - no postgres for the emulator
       FIELDHUB_DATABASE_URL: sqlite:////tmp/fieldhub.db
       FIELDHUB_PILOT_USERNAME: ${FIELDHUB_PILOT_USERNAME:-pilot}
@@ -47,8 +51,14 @@ services:
     # loopback-only direct port for the seed script / debugging
     ports:
       - "127.0.0.1:8000:8000"
+    # mount the connect page live so JS/HTML edits apply on the next request
+    # (no image rebuild needed while iterating in the emulator)
+    volumes:
+      - ../fieldhub/app/static:/app/app/static:ro
     depends_on:
       minio:
+        condition: service_started
+      emqx:
         condition: service_started
 
   minio:
@@ -66,6 +76,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # plain-mqtt broker (no TLS, anonymous) - pilot's thing module connects here
+  # via 10.0.2.2:1883 so the mission/wayline module's gate opens. TLS/MQTTS is a
+  # hardware concern (V5), out of scope for the emulator.
+  emqx:
+    image: emqx/emqx:5.8.9
+    container_name: emqx-emulator
+    ports:
+      - "1883:1883"
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
 
   # the single device-facing port. routes pilot's traffic to fieldhub, and the
   # object-store bucket paths to minio - preserving the signed Host header so

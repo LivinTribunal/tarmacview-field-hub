@@ -13,7 +13,7 @@ DRIVER = Path(__file__).parent / "data" / "pilot_connect_driver.js"
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
-# full happy-path order: license verify -> login -> api -> thing -> media
+# full happy-path order: license verify -> login -> api -> thing -> media -> mission
 HAPPY_EVENTS = [
     "fetch:GET:/pilot/config",
     "bridge:platformVerifyLicense",
@@ -26,6 +26,7 @@ HAPPY_EVENTS = [
     "bridge:platformSetInformation",
     "bridge:thingGetConnectState",
     "bridge:platformLoadComponent:media",
+    "bridge:platformLoadComponent:mission",
 ]
 
 
@@ -89,7 +90,7 @@ def test_pilot_config_unconfigured(client, monkeypatch):
 
 @requires_node
 def test_flow_happy_path_order():
-    """license -> login -> api -> thing -> media, each step gating the next."""
+    """license -> login -> api -> thing -> media -> mission, each step gating the next."""
     report = _run_flow("happy")
 
     assert report["result"]["completed"] is True
@@ -121,6 +122,10 @@ def test_flow_module_params():
         "autoUploadPhotoType": 0,
         "autoUploadVideo": True,
     }
+
+    # mission module enables the cloud route-library sync; empty params, host +
+    # token come from the api module (confirmed against real pilot 2)
+    assert components["mission"] == {}
 
 
 @requires_node

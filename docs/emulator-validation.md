@@ -135,15 +135,17 @@ Keys are `domain-type-subtype` (`dji-cloud-api-reference.md` §6):
 Work down the connect page and the route library, watching the nginx log. For
 each, record the verdict in the issue tracker (monorepo #812).
 
-**Expected divergence (the thing we're here to confirm):** with no native
-`window.djiBridge`, the connect page falls through to the *"open this page in DJI
-Pilot 2"* banner and stops — Pilot cannot log in or attach. If that happens it
-confirms BlueStacks lacks the bridge and the next deliverable is a **no-bridge
-web-login fallback** on the connect page (mirroring the demo's web console), so
-Pilot's webview can establish a session and drive the HTTP wayline sync. Capture
-exactly where it stops and what (if anything) Pilot requests.
+**Result (2026-06-14): the native Cloud Service flow DID inject `window.djiBridge`
+and the full connect chain ran against fieldhub.** The earlier "no bridge in
+BlueStacks" worry applied to loading the demo's web console in a webview, not to
+this native flow. The connect page (UA `dji-open-platform`) loaded, license
+verified, login succeeded, and `api`/`media`/`mission` loaded. The one gap was
+`mission` — the connect page didn't load it, so Pilot never queried `/wayline`;
+adding `platformLoadComponent("mission", {})` fixed it and routes appeared under
+a **Cloud** tab. (Hence the broker in the stack — the demo gates `mission`
+behind MQTT, though our ungated load syncs over HTTP regardless.)
 
-If Pilot *does* get a session and syncs the route library, validate:
+Validate (all confirmed 2026-06-14):
 
 - [ ] Each seeded wayline appears in Pilot's Flight Route Library.
 - [ ] Pilot filters by connected/selected aircraft model — does the M4T
@@ -151,7 +153,7 @@ If Pilot *does* get a session and syncs the route library, validate:
       rejected enum 99)?
 - [ ] Name search, favorites, pagination behave.
 - [ ] Selecting a wayline downloads it: nginx log shows
-      `GET /wayline/.../url` → `302` → `GET /tarmacview-waylines/...` → `200`.
+      `GET /wayline/.../url` → `307` → `GET /tarmacview-waylines/...` → `200`.
 - [ ] Pilot **opens** the downloaded KMZ (valid `wpmz/template.kml` +
       `waylines.wpml`) for each fleet model — catches exporter × dictionary ×
       import bugs (uppercase `UTF-8`, unknown enums, forbidden name chars).
