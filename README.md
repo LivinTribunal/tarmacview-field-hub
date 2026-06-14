@@ -15,6 +15,9 @@ that's the cross-repo seam to keep in sync (see `docs/ROADMAP.md`).
 
 ## What's here
 
+- `INSTALL.md` — install + connect guide: bring the field stack up and get
+  TarmacView's Send-to-drone panel off "not connected" (backend↔hub wiring, certs,
+  RC provisioning).
 - `fieldhub/` — the device-facing FastAPI service (Cloud API: device binding,
   wayline library, media STS/callbacks, the Pilot connect page). See
   `fieldhub/README.md` to run it.
