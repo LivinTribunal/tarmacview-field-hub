@@ -48,6 +48,15 @@
     color: #ffffff;
   }
   button:disabled, input:disabled { opacity: 0.45; }
+  #session { display: grid; gap: 12px; margin: 0 0 24px; }
+  #session-user { margin: 0; font-size: 24px; color: #93a1b3; }
+  #session-user b { color: #43c272; font-weight: 600; }
+  #disconnect {
+    background: #d9362c;
+    color: #ffffff;
+    border: 0;
+    font-size: 18px;
+  }
   #status-panel { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
   #status-panel li {
     display: flex;
@@ -93,8 +102,13 @@
     <label>Password
       <input id="password" type="password" autocomplete="current-password" disabled>
     </label>
-    <button id="login-button" type="submit" disabled>Log in</button>
+    <button id="login-button" type="submit" disabled>Connect</button>
   </form>
+
+  <div id="session" hidden>
+    <p id="session-user">Connected as <b id="session-name"></b></p>
+    <button id="disconnect" type="button">Disconnect</button>
+  </div>
 
   <ul id="status-panel">
     <li id="status-license" data-state="pending">
@@ -131,6 +145,23 @@
   var passwordInput = document.getElementById("password");
   var loginButton = document.getElementById("login-button");
   var errorLine = document.getElementById("error-line");
+  var sessionBlock = document.getElementById("session");
+  var sessionName = document.getElementById("session-name");
+  var disconnectButton = document.getElementById("disconnect");
+
+  // cache the access token so a webview reload (e.g. returning from the route
+  // library) resumes the session instead of forcing a re-login. lan-only
+  // surface, same posture as the token itself.
+  var TOKEN_KEY = "tarmacview.pilot.token";
+  function getCachedToken() {
+    try { return window.localStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+  }
+  function persistToken(token) {
+    try { window.localStorage.setItem(TOKEN_KEY, token); } catch (e) { /* storage off */ }
+  }
+  function clearToken() {
+    try { window.localStorage.removeItem(TOKEN_KEY); } catch (e) { /* storage off */ }
+  }
 
   var MARKS = { pending: "○", running: "…", waiting: "…", ok: "✓", error: "✗" };
 
@@ -161,7 +192,12 @@
     errorLine.textContent = "pilot-connect.js failed to load - reload the page";
     return;
   }
-  form.hidden = false;
+
+  // disconnect - unload the cloud modules, drop the cached token, back to the form
+  disconnectButton.addEventListener("click", function () {
+    connect.disconnect({ bridge: window.djiBridge, clearToken: clearToken });
+    window.location.reload();
+  });
 
   // the first flow run waits here for the form submit; after a failed run the
   // next submit starts a fresh flow with the entered credentials
@@ -184,6 +220,7 @@
   function waitForCredentials() {
     return new Promise(function (resolve) {
       resolveCredentials = resolve;
+      form.hidden = false;
       setFormEnabled(true);
     });
   }
@@ -198,8 +235,17 @@
       getCredentials: credentials
         ? function () { return Promise.resolve(credentials); }
         : waitForCredentials,
+      getCachedToken: getCachedToken,
+      persistToken: persistToken,
+      clearToken: clearToken,
     }).then(function (result) {
-      if (!result.completed) setFormEnabled(true);
+      if (result.completed) {
+        form.hidden = true;
+        sessionName.textContent = result.username || "operator";
+        sessionBlock.hidden = false;
+      } else {
+        setFormEnabled(true);
+      }
     });
   }
 

@@ -149,6 +149,60 @@ def test_flow_login_request_shape():
 
 
 @requires_node
+def test_flow_caches_token_on_login():
+    """a successful login caches the access token for later resume."""
+    report = _run_flow("happy")
+
+    assert report["tokenOps"] == [{"op": "persist", "token": "token-1"}]
+    assert report["cachedToken"] == "token-1"
+
+
+@requires_node
+def test_flow_resume_skips_login():
+    """a cached token is refreshed and the login form is skipped."""
+    report = _run_flow("resume")
+
+    assert report["result"]["completed"] is True
+    assert "credentials" not in report["events"]
+    refresh = next(f for f in report["fetches"] if f["url"].endswith("/token/refresh"))
+    assert refresh["method"] == "POST"
+    assert refresh["headers"]["x-auth-token"] == "cached-token"
+    assert not any(f["url"].endswith("/login") for f in report["fetches"])
+
+    # the refreshed token replaces the cached one and is what the api module gets
+    components = {
+        call["args"][0]: json.loads(call["args"][1])
+        for call in report["calls"]
+        if call["method"] == "platformLoadComponent"
+    }
+    assert components["api"]["token"] == "token-refreshed"
+    assert report["cachedToken"] == "token-refreshed"
+
+
+@requires_node
+def test_flow_resume_falls_back_when_token_stale():
+    """a token that fails to refresh is dropped and the form is used instead."""
+    report = _run_flow("resume-expired")
+
+    assert report["result"]["completed"] is True
+    assert report["tokenOps"][0] == {"op": "clear"}
+    assert "credentials" in report["events"]
+    assert any(f["url"].endswith("/login") for f in report["fetches"])
+    assert report["cachedToken"] == "token-1"
+
+
+@requires_node
+def test_disconnect_unloads_modules_and_clears_token():
+    """disconnect unloads the loaded components (reverse order) and drops the token."""
+    report = _run_flow("disconnect")
+
+    unloaded = [c["args"][0] for c in report["calls"] if c["method"] == "platformUnloadComponent"]
+    assert unloaded == ["mission", "media", "thing", "api"]
+    assert report["tokenOps"] == [{"op": "clear"}]
+    assert report["cachedToken"] is None
+
+
+@requires_node
 def test_flow_mqtt_callback_updates_state():
     """the registered thing callback drives the mqtt row in both directions."""
     report = _run_flow("happy")

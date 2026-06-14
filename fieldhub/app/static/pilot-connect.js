@@ -134,7 +134,8 @@
     // license verify -> login -> api -> thing (+ workspace identity) -> media
     // -> mission; each step gates the next, the first failure stops with a
     // visible error. deps: {bridge, fetchFn, apiHost, onStatus,
-    // registerCallback, getCredentials}
+    // registerCallback, getCredentials, getCachedToken?, persistToken?,
+    // clearToken?} - the optional token deps drive cached-session resume
     var bridge = deps.bridge;
     var fetchFn = deps.fetchFn;
     var onStatus = deps.onStatus || function () {};
@@ -181,24 +182,43 @@
     }
     onStatus(STEP_LICENSE, "ok", "license verified");
 
-    // login - credentials come from the page form (or the test driver)
-    onStatus(STEP_LOGIN, "waiting", "enter credentials");
-    var credentials = await deps.getCredentials();
-    onStatus(STEP_LOGIN, "running", "logging in");
-    var login;
-    try {
-      login = await fetchEnvelope(fetchFn, "/manage/api/v1/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: credentials.username,
-          password: credentials.password,
-          flag: PILOT_LOGIN_FLAG,
-        }),
-      });
-    } catch (err) {
-      return fail(STEP_LOGIN, "login: " + err.message);
+    // login - resume a cached session if its token still refreshes, otherwise
+    // prompt for credentials. caching the token means a webview reload (e.g.
+    // returning from the route library) doesn't force a re-login.
+    var login = null;
+    var cachedToken = deps.getCachedToken ? deps.getCachedToken() : null;
+    if (cachedToken) {
+      onStatus(STEP_LOGIN, "running", "resuming session");
+      try {
+        login = await fetchEnvelope(fetchFn, "/manage/api/v1/token/refresh", {
+          method: "POST",
+          headers: { "x-auth-token": cachedToken },
+        });
+      } catch (err) {
+        // stale/expired token - drop it and fall back to the form
+        if (deps.clearToken) deps.clearToken();
+        login = null;
+      }
     }
+    if (!login) {
+      onStatus(STEP_LOGIN, "waiting", "enter credentials");
+      var credentials = await deps.getCredentials();
+      onStatus(STEP_LOGIN, "running", "logging in");
+      try {
+        login = await fetchEnvelope(fetchFn, "/manage/api/v1/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: credentials.username,
+            password: credentials.password,
+            flag: PILOT_LOGIN_FLAG,
+          }),
+        });
+      } catch (err) {
+        return fail(STEP_LOGIN, "login: " + err.message);
+      }
+    }
+    if (deps.persistToken) deps.persistToken(login.access_token);
     onStatus(STEP_LOGIN, "ok", "logged in as " + login.username);
 
     // api module - http host + token for pilot-initiated calls
@@ -284,11 +304,36 @@
     return result;
   }
 
+  // modules runConnectFlow loads, in load order
+  var LOADED_MODULES = ["api", "thing", "media", "mission"];
+
+  function disconnect(deps) {
+    // tear down the cloud link - unload the loaded components (reverse load
+    // order) so pilot drops the platform connection, and clear the cached
+    // token so the next load starts at the connect form. deps: {bridge,
+    // clearToken?}
+    var bridge = deps.bridge;
+    if (bridge && typeof bridge.platformUnloadComponent === "function") {
+      LOADED_MODULES.slice()
+        .reverse()
+        .forEach(function (name) {
+          try {
+            bridge.platformUnloadComponent(name);
+          } catch (err) {
+            // best effort - keep unloading the rest
+          }
+        });
+    }
+    if (deps.clearToken) deps.clearToken();
+  }
+
   return {
     BROWSER_MODE_MESSAGE: BROWSER_MODE_MESSAGE,
     THING_CALLBACK_NAME: THING_CALLBACK_NAME,
     MEDIA_PARAMS: MEDIA_PARAMS,
+    LOADED_MODULES: LOADED_MODULES,
     parseBridgeReturn: parseBridgeReturn,
     runConnectFlow: runConnectFlow,
+    disconnect: disconnect,
   };
 });
