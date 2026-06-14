@@ -48,10 +48,10 @@ services:
       FIELDHUB_DJI_APP_ID: ${FIELDHUB_DJI_APP_ID:-}
       FIELDHUB_DJI_APP_KEY: ${FIELDHUB_DJI_APP_KEY:-}
       FIELDHUB_DJI_APP_LICENSE: ${FIELDHUB_DJI_APP_LICENSE:-}
-    # loopback-only direct port for the seed script / debugging. 8800 (not 8000)
-    # to avoid colliding with the TarmacView backend, which uses host 8000.
-    ports:
-      - "127.0.0.1:8800:8800"
+    # no host port - fieldhub is reached only through nginx (:8080) on the
+    # compose network, so nothing collides with host services (e.g. the
+    # TarmacView backend on 8000). debug via `curl localhost:8080/...` or
+    # `docker exec`.
     # mount the connect page live so JS/HTML edits apply on the next request
     # (no image rebuild needed while iterating in the emulator)
     volumes:
