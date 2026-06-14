@@ -24,6 +24,8 @@ that's the cross-repo seam to keep in sync (see `docs/ROADMAP.md`).
 - `docs/specs/dji-wpml-reference.md` — WPML/KMZ structure.
 - `docs/adr/2026-06-09-field-hub-local-cloud-api.md` — decision record.
 - `scripts/field-hub/gen-certs.sh` — local CA + per-service TLS cert tooling.
+- `scripts/field-hub/stop-field.sh` — stop/reset the compose `field` profile
+  (`--wipe` also drops the data volumes, including the shared `pgdata`).
 - `docs/ROADMAP.md` — prioritized next steps + the cross-repo seam, written so
   agents can pick up handed-off tasks with the right context.
 - `.github/workflows/` — the harnext automation pipeline + CI, **adapted for
