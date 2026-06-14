@@ -1,6 +1,7 @@
 """fastapi application for the field hub - local dji cloud api gateway."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
@@ -22,11 +23,22 @@ from app.core.exceptions import HubApiError
 from app.schemas.envelope import HttpResultResponse
 from app.services.mqtt_listener import listener
 
+logger = logging.getLogger(__name__)
+
+
+def _log_device_addresses() -> None:
+    """echo the resolved device-facing addresses, warning on unreachable hosts."""
+    summary, warnings = settings.device_address_report()
+    logger.info("device-facing addresses: %s", " | ".join(summary))
+    for warning in warnings:
+        logger.warning(warning)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """init the registry db and run the mqtt listener for the app's lifetime."""
     init_db()
+    _log_device_addresses()
     task = None
     if settings.mqtt_enabled:
         task = asyncio.create_task(listener.run())

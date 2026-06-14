@@ -119,6 +119,15 @@ def test_register_is_idempotent_per_wayline_id(client, db_session):
     assert rows[0].sign == "ffff"
 
 
+def test_register_sanitizes_forbidden_name(client, db_session):
+    """a name with dji-forbidden chars is sanitized before it can break the list."""
+    response = _register(client, name="RWY22_PAPI/insp:01")
+
+    assert response.status_code == 200
+    wayline = db_session.get(Wayline, SAMPLE_REGISTER_FORM["wayline_id"])
+    assert wayline.name == "RWY22 PAPI insp 01"
+
+
 def test_register_requires_hub_secret(client):
     """missing or wrong secret never reaches the store."""
     response = client.post(

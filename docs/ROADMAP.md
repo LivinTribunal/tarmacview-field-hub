@@ -34,6 +34,10 @@ A change that spans both repos says so in its PR.
 ## P1 — before the RC arrives (do now, no hardware needed)
 
 ### 1. OSS split-horizon: device-facing vs internal endpoint  **[hub]** · T3
+**Status: ✅ Landed.** `object_store.py` (`_internal_client` vs `_public_client`),
+`storage_service.device_endpoint()`, and the split MinIO settings in
+`core/config.py` issue device-facing presigned/STS hosts while the hub's own
+put/stat use the internal host; tests cover both.
 **Why.** The spike proved the server and the device cannot share one MinIO
 address: the server reaches MinIO over the compose network (`minio:9000`); the
 RC reaches it only over the LAN. Presigned URLs / STS `endpoint` handed to Pilot
@@ -51,6 +55,7 @@ device-facing host; the hub still reads/writes MinIO over the internal host;
 tests cover both. The media e2e test still self-skips without MinIO.
 
 ### 2. Single-source device-facing addressing  **[hub]** · T2
+**Status: 🔧 In progress** (branch `feat/single-source-device-addressing`).
 **Why.** The spike's #1 time-sink: a stale IP in *one* of {MQTT host, STS
 endpoint, connect-page `mqtt_addr`} silently breaks the chain with a generic
 "network abnormal" and no hint which leg. (`dji-cloud-api-reference.md` §7.)
@@ -63,6 +68,10 @@ for when the laptop's LAN IP changes.
 startup logs show them; a test asserts they agree.
 
 ### 3. Device dictionary completeness  **[hub]** · T2
+**Status: ✅ Landed.** `models/device.py` `DEVICE_DICTIONARY` seeds every fleet
+model incl. M4T `0-99-1` and RC Plus `2-119-0`; `device_registry.apply_update_topo`
+degrades gracefully on an unknown key (no 500), covered by a test. RC Plus 2's
+topology key is still captured on hardware (item 5).
 **Why.** The spike confirmed `wpml:droneEnumValue=99` for the M4 series; demo
 v1.10's dictionary predates it and *rejects* it. The hub must seed every fleet
 model and degrade gracefully (never crash binding) on an unknown device.
@@ -75,6 +84,9 @@ succeed; tests cover the unknown-device path. (RC Plus 2 key is captured on
 hardware — item 6.)
 
 ### 4. Dispatched-filename / wayline-name sanitization  **[hub]** + **[monorepo]** · T2
+**Status: 🔧 In progress** — the **[hub]** half (defensive sanitization on
+register) is on branch `feat/single-source-device-addressing`; the **[monorepo]**
+half (KMZ exporter uppercase `UTF-8` + filename sanitize) is still open.
 **Why.** The spike: a wayline name with an underscore broke the *list* endpoint
 for every wayline (DJI name rule forbids `_ . / \ < > : " | ? *`), and lxml's
 lowercase `encoding='utf-8'` got the KMZ rejected (must be uppercase `UTF-8`).

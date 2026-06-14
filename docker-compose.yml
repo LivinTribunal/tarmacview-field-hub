@@ -90,14 +90,14 @@ services:
       FIELDHUB_MINIO_ENDPOINT: http://minio:9000
       FIELDHUB_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-tarmacview}
       FIELDHUB_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-tarmacview-minio}
-      # lan-reachable minio url baked into presigned wayline downloads - set
-      # to the laptop's lan ip (http://192.168.x.x:9000), never a compose hostname
-      # both fed from one host var - the same lan address serves presigned
-      # downloads and sts payloads
-      FIELDHUB_MINIO_PUBLIC_ENDPOINT: ${FIELDHUB_MINIO_DEVICE_ENDPOINT:-}
-      # device-facing object-store endpoint handed to pilot in sts payloads -
-      # the laptop's lan ip (http://192.168.x.x:9000), never a compose hostname
+      # the laptop's lan ip on the travel router - the one host every
+      # device-facing address (mqtt addr, sts endpoint, presigned wayline urls)
+      # derives from. never a compose hostname. set in .env.docker
+      FIELDHUB_PUBLIC_HOST: ${FIELDHUB_PUBLIC_HOST:-}
+      # per-service overrides - leave empty unless minio/the broker is reached
+      # on a different host/port than public_host derives (e.g. a reverse proxy)
       FIELDHUB_MINIO_DEVICE_ENDPOINT: ${FIELDHUB_MINIO_DEVICE_ENDPOINT:-}
+      FIELDHUB_MQTT_DEVICE_ADDR: ${FIELDHUB_MQTT_DEVICE_ADDR:-}
       # backend base url for media-event reporting (compose-internal)
       FIELDHUB_BACKEND_URL: http://backend:8000
       FIELDHUB_TLS_CERT: /certs/server.crt
@@ -105,9 +105,6 @@ services:
       FIELDHUB_SHARED_SECRET: ${FIELDHUB_SHARED_SECRET:-}
       # device registry lives in the shared postgres, own "fieldhub" schema
       FIELDHUB_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tarmacview}:${POSTGRES_PASSWORD:-tarmacview}@postgres:5432/${POSTGRES_DB:-tarmacview}
-      # device-facing broker address handed to pilot at login - set this to
-      # the laptop's lan ip (ssl://192.168.x.x:8883), never a compose hostname
-      FIELDHUB_MQTT_DEVICE_ADDR: ${FIELDHUB_MQTT_DEVICE_ADDR:-}
       # pilot login account - login stays disabled while the password is empty
       FIELDHUB_PILOT_USERNAME: ${FIELDHUB_PILOT_USERNAME:-pilot}
       FIELDHUB_PILOT_PASSWORD: ${FIELDHUB_PILOT_PASSWORD:-}

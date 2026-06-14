@@ -94,6 +94,7 @@ All settings come from `FIELDHUB_*` env vars (see `app/core/config.py`):
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `FIELDHUB_PUBLIC_HOST` | empty | the laptop's LAN IP on the travel router (no scheme/port, e.g. `192.168.8.100`) — the single host every device-facing address (`mqtt_addr`, STS endpoint, presigned wayline URLs) derives from. Change this one value to re-point them all; the startup log echoes the resolved addresses and warns if any still points at a compose/loopback host |
 | `FIELDHUB_MQTT_HOST` | `localhost` | EMQX host (healthz probe + hub-side listener) |
 | `FIELDHUB_MQTT_PORT` | `8883` | EMQX MQTTS port |
 | `FIELDHUB_MINIO_ENDPOINT` | `http://localhost:9000` | MinIO base URL (hub-side) |
@@ -102,7 +103,7 @@ All settings come from `FIELDHUB_*` env vars (see `app/core/config.py`):
 | `FIELDHUB_MINIO_REGION` | `us-east-1` | region echoed in STS payloads |
 | `FIELDHUB_MINIO_OBJECT_KEY_PREFIX` | `media` | object key prefix Pilot uploads under |
 | `FIELDHUB_MINIO_STS_EXPIRY_S` | `3600` | temporary credential lifetime (MinIO floors AssumeRole at 1 h) |
-| `FIELDHUB_MINIO_DEVICE_ENDPOINT` | empty | MinIO endpoint handed to Pilot in STS payloads — the laptop's LAN IP (`http://192.168.x.x:9000`), never a compose hostname; falls back to `FIELDHUB_MINIO_ENDPOINT` |
+| `FIELDHUB_MINIO_DEVICE_ENDPOINT` | empty | explicit override for the device-facing MinIO endpoint (STS payloads + presigned wayline URLs) — a full URL like `http://192.168.x.x:9000`. Prefer `FIELDHUB_PUBLIC_HOST`; set this only behind a reverse proxy on a different host/port. Falls back to `FIELDHUB_PUBLIC_HOST`, then `FIELDHUB_MINIO_ENDPOINT` |
 | `FIELDHUB_BACKEND_URL` | empty | TarmacView backend base URL for media-event reporting; empty disables reporting |
 | `FIELDHUB_BACKEND_TIMEOUT` | `5.0` | media-event report timeout (seconds) |
 | `FIELDHUB_TLS_CERT` | `/certs/server.crt` | HTTPS cert served by uvicorn |
@@ -112,7 +113,7 @@ All settings come from `FIELDHUB_*` env vars (see `app/core/config.py`):
 | `FIELDHUB_DATABASE_URL` | `sqlite:///./fieldhub.db` | device registry storage; compose points it at the shared postgres |
 | `FIELDHUB_MQTT_ENABLED` | `true` | hub-side MQTT listener on/off (tests run with it off) |
 | `FIELDHUB_MQTT_TLS` / `FIELDHUB_MQTT_TLS_CA` | `true` / `/certs/ca.crt` | listener TLS toward EMQX |
-| `FIELDHUB_MQTT_DEVICE_ADDR` | empty | `mqtt_addr` handed to Pilot at login — the laptop's LAN IP (`ssl://192.168.x.x:8883`), never a compose hostname |
+| `FIELDHUB_MQTT_DEVICE_ADDR` | empty | explicit override for the `mqtt_addr` handed to Pilot at login — a full URL like `ssl://192.168.x.x:8883`. Prefer `FIELDHUB_PUBLIC_HOST`; falls back to it (`ssl://<public_host>:<mqtt_port>`), then `ssl://<mqtt_host>:<mqtt_port>` |
 | `FIELDHUB_PILOT_USERNAME` / `FIELDHUB_PILOT_PASSWORD` | `pilot` / empty | Pilot login account; login is rejected while the password is empty |
 | `FIELDHUB_DJI_APP_ID` / `FIELDHUB_DJI_APP_KEY` / `FIELDHUB_DJI_APP_LICENSE` | empty | DJI developer app the connect page verifies via JSBridge; `GET /pilot/config` answers an envelope error while unset |
 | `FIELDHUB_WORKSPACE_ID` / `FIELDHUB_WORKSPACE_NAME` | fixed UUID / `TarmacView Field` | workspace presented to Pilot |
