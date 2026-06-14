@@ -4,6 +4,7 @@ import http.server
 import socket
 import threading
 
+from app import __version__
 from app.services import health_service
 
 
@@ -18,9 +19,24 @@ def test_healthz_ok_when_dependencies_up(client, monkeypatch):
     assert response.json() == {
         "status": "ok",
         "service": "fieldhub",
+        "version": __version__,
         "broker": True,
         "object_store": True,
     }
+
+
+def test_healthz_reports_version(client, monkeypatch):
+    """snapshot carries the running hub build version."""
+    monkeypatch.setattr(health_service, "check_broker", lambda: True)
+    monkeypatch.setattr(health_service, "check_object_store", lambda: True)
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["version"], str)
+    assert body["version"]
+    assert body["version"] == __version__
 
 
 def test_healthz_degraded_when_broker_down(client, monkeypatch):

@@ -4,6 +4,7 @@ import socket
 
 import httpx
 
+from app import __version__
 from app.core.config import settings
 
 
@@ -37,6 +38,7 @@ def get_health() -> dict:
     return {
         "status": status,
         "service": "fieldhub",
+        "version": __version__,
         "broker": broker,
         "object_store": object_store,
     }
