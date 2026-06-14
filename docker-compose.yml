@@ -1,3 +1,8 @@
+# field-profile REFERENCE. this repo owns and builds only the fieldhub context;
+# the backend/frontend build contexts (./backend, ./frontend) are monorepo-only
+# and intentionally absent here - the monorepo launcher drives the full stack.
+# the field profile here is fieldhub + emqx + minio over the base postgres.
+# teardown/reset: scripts/field-hub/stop-field.sh (--wipe drops the data volumes).
 services:
   postgres:
     image: postgres:16
