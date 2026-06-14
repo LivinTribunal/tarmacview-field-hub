@@ -1,0 +1,82 @@
+# cert-free emulator stack - drives real DJI Pilot 2 (in BlueStacks) against the
+# real fieldhub service, not DJI's reference demo. plain HTTP, no postgres, no
+# MQTTS: BlueStacks lacks the native JSBridge so the MQTT/media legs are
+# hardware-only anyway (see docs/emulator-validation.md).
+#
+#   docker compose --env-file emulator/.env.emulator \
+#     -f emulator/docker-compose.emulator.yml up -d --build
+#
+# pass your settings via --env-file (compose interpolates ${VAR} below from it);
+# environment: overrides env_file:, so --env-file is the one predictable path.
+#
+# everything device-facing is funnelled through one nginx port (8080) because
+# BlueStacks reaches the host only via the alias 10.0.2.2 (-> host loopback).
+
+services:
+  fieldhub:
+    build:
+      context: ../fieldhub
+      dockerfile: Dockerfile
+    container_name: fieldhub-emulator
+    # override the image's TLS uvicorn CMD - the emulator runs plain HTTP behind nginx
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # hub-side (compose-internal) object store
+      FIELDHUB_MINIO_ENDPOINT: http://minio:9000
+      FIELDHUB_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-tarmacview}
+      FIELDHUB_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-tarmacview-minio}
+      # device-facing: every address pilot dials goes through the nginx proxy on
+      # 10.0.2.2:8080 - the only host address BlueStacks can reach. override to
+      # http://localhost:8080 for a host-side smoke test (no emulator).
+      FIELDHUB_MINIO_DEVICE_ENDPOINT: ${FIELDHUB_MINIO_DEVICE_ENDPOINT:-http://10.0.2.2:8080}
+      FIELDHUB_MQTT_DEVICE_ADDR: ${FIELDHUB_MQTT_DEVICE_ADDR:-tcp://10.0.2.2:1883}
+      # mqtt device-online needs the native bridge (absent in BlueStacks) - the
+      # hub-side listener stays off so the stack needs no TLS material at all
+      FIELDHUB_MQTT_ENABLED: "false"
+      # registry in a throwaway sqlite file - no postgres for the emulator
+      FIELDHUB_DATABASE_URL: sqlite:////tmp/fieldhub.db
+      FIELDHUB_PILOT_USERNAME: ${FIELDHUB_PILOT_USERNAME:-pilot}
+      FIELDHUB_PILOT_PASSWORD: ${FIELDHUB_PILOT_PASSWORD:-pilot-emulator}
+      # shared secret the seed script uses to register waylines
+      FIELDHUB_SHARED_SECRET: ${FIELDHUB_SHARED_SECRET:-emulator-secret}
+      # dji developer app the connect page verifies via jsbridge (real values
+      # required for the license step) - set in .env.emulator
+      FIELDHUB_DJI_APP_ID: ${FIELDHUB_DJI_APP_ID:-}
+      FIELDHUB_DJI_APP_KEY: ${FIELDHUB_DJI_APP_KEY:-}
+      FIELDHUB_DJI_APP_LICENSE: ${FIELDHUB_DJI_APP_LICENSE:-}
+    # loopback-only direct port for the seed script / debugging
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      minio:
+        condition: service_started
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: minio-emulator
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-tarmacview}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-tarmacview-minio}
+    ports:
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # the single device-facing port. routes pilot's traffic to fieldhub, and the
+  # object-store bucket paths to minio - preserving the signed Host header so
+  # presigned SigV4 download urls validate (spike finding, §9.2).
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx-emulator
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - fieldhub
+      - minio
