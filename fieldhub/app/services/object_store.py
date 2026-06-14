@@ -14,13 +14,19 @@ from app.core.config import settings
 
 
 def _client_for(endpoint: str) -> Minio:
-    """minio client for an endpoint url like http://minio:9000."""
+    """minio client for an endpoint url like http://minio:9000.
+
+    region is passed explicitly so presigning stays pure local computation - an
+    unset region makes minio-py fetch it via a live GetBucketLocation call, which
+    hangs when signing against the device-facing host (unreachable from the hub).
+    """
     parsed = urlparse(endpoint)
     return Minio(
         parsed.netloc,
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=parsed.scheme == "https",
+        region=settings.minio_region,
     )
 
 
