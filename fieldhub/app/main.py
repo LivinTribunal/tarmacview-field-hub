@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app import __version__
 from app.api.routes.health import router as health_router
 from app.api.routes.internal import router as internal_router
 from app.api.routes.manage import router as manage_router
@@ -41,7 +42,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         lifespan=lifespan,
         title="TarmacView Field Hub",
-        version="0.1.0",
+        version=__version__,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )

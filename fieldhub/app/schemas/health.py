@@ -8,5 +8,6 @@ class HealthResponse(BaseModel):
 
     status: str
     service: str
+    version: str
     broker: bool
     object_store: bool
