@@ -15,9 +15,13 @@ truth): `docs/specs/dji-cloud-api-reference.md`. KMZ/WPML: `dji-wpml-reference.m
 
 **Status:** Phases 1–3 + the Pilot connect page are merged. A 2026-06-13
 BlueStacks spike confirmed the connect chain (V1 partial) and the full mission
-dispatch round-trip (V2) in emulation; the interop constraints it surfaced are
-in `dji-cloud-api-reference.md` §9. V3/V4/V5 + native-JSBridge + MQTT
-device-online are hardware-only (RC Plus 2, ~next week, monorepo issue #812).
+dispatch round-trip (V2) against the DJI demo; a 2026-06-14 run then drove real
+Pilot 2 against **fieldhub itself** — the `mission` JSBridge module (added in
+#6) makes routes appear under Pilot's Cloud tab, and wayline sync + KMZ download
++ a real M4T export all worked end to end. The interop constraints both runs
+surfaced are in `dji-cloud-api-reference.md` §9; the runbook is
+`docs/emulator-validation.md`. V3/V4/V5 + native-JSBridge + MQTT device-online
+are hardware-only (RC Plus 2, ~next week, monorepo issue #812).
 
 ### Cross-repo seam — where to work
 
@@ -105,8 +109,9 @@ point Cloud Service at the hub URL), then work `FIELD-HUB.md` §9: **V1** offlin
 binding across reboots, **V2** native route-list refresh UX, **V3** 4K video
 auto-upload + resume on WiFi drop, **V4** MinIO STS from Pilot's S3 client,
 **V5** TLS/MQTTS acceptance of the local CA. Confirm the #831 connect page's
-JSBridge flow on real hardware (license verify → login `flag:2` → `thing`/`media`
-load → `update_topo`), and capture the **RC Plus 2 topology key** (§6).
+JSBridge flow on real hardware (license verify → login `flag:2` →
+`thing`/`media`/`mission` load → `update_topo`), and capture the **RC Plus 2
+topology key** (§6).
 **Done-when.** §9 verdicts posted, deltas filed as small follow-up issues,
 `dji-cloud-api-reference.md` `⚠ UNVERIFIED` markers resolved, #812 closed.
 
@@ -123,11 +128,12 @@ hand-off into the existing processing pipeline.
 tested.
 
 ### 7. Connect-page JSBridge hardening  **[hub]** · T2 (verify needs hardware)
-**Why.** `§5` flags the `mission` module as ⚠ UNVERIFIED — the route library may
-need it loaded beyond `api`/`thing`/`media`; bridge-return parsing has edge
-cases (`code:0` + `data:false` = failure).
-**Do.** After item 5's hardware findings, add the `mission` module to the
-connect sequence if required, and tighten `parseBridgeReturn` edge handling.
+**Why.** The `mission` module the route library needs landed in #6 (§5 resolved,
+confirmed in BlueStacks against fieldhub); what remains is bridge-return parsing
+edge cases (`code:0` + `data:false` = failure) and confirming the chain on the
+native bridge.
+**Do.** Tighten `parseBridgeReturn` edge handling, then verify route sync +
+media upload from the native bridge after item 5's hardware findings.
 **Done-when.** Route sync + media upload both work from the native bridge on
 hardware.
 
