@@ -35,7 +35,7 @@ def _public_client() -> Minio:
     presigned urls embed the host in the signature, so they must be signed
     against the address pilot will actually dial (ref doc section 7).
     """
-    return _client_for(settings.minio_public_endpoint or settings.minio_endpoint)
+    return _client_for(settings.device_minio_endpoint())
 
 
 def put_object(object_key: str, data: bytes, content_type: str) -> None:

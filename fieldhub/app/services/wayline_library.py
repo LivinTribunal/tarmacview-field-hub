@@ -1,10 +1,26 @@
 """wayline library - register/upsert, filtered listing, favorites, deletion."""
 
+import re
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.models.wayline import Wayline
+
+# dji forbids these in a route name (the name derives from the kmz filename);
+# an underscore broke the list endpoint for every wayline in the spike
+_FORBIDDEN_WAYLINE_CHARS = re.compile(r'[_./\\<>:"|?*]')
+
+
+def sanitize_wayline_name(name: str) -> str:
+    """strip dji-forbidden chars from a wayline name - they break the route list.
+
+    forbidden chars collapse to a single space; an empty result falls back so a
+    name made only of forbidden chars never becomes blank.
+    """
+    cleaned = _FORBIDDEN_WAYLINE_CHARS.sub(" ", name)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or "wayline"
 
 
 def register_wayline(
@@ -23,8 +39,10 @@ def register_wayline(
 
     a stale row holding the same mission under a different wayline id (backend
     re-provisioned while the hub kept state) is replaced, keeping one route
-    per mission.
+    per mission. the name is sanitized so a forbidden char can't break pilot's
+    route list.
     """
+    name = sanitize_wayline_name(name)
     wayline = db.get(Wayline, wayline_id)
     if wayline is None:
         stale = db.query(Wayline).filter(Wayline.mission_id == mission_id).first()
@@ -74,10 +92,14 @@ def get_wayline(db: Session, wayline_id: str) -> Wayline | None:
 
 
 def duplicate_names(db: Session, names: list[str]) -> list[str]:
-    """subset of the given names already present in the library."""
-    if not names:
+    """subset of the given names already present in the library.
+
+    names are sanitized first so the check matches the stored (sanitized) form.
+    """
+    cleaned = [sanitize_wayline_name(n) for n in names]
+    if not cleaned:
         return []
-    rows = db.query(Wayline.name).filter(Wayline.name.in_(names)).all()
+    rows = db.query(Wayline.name).filter(Wayline.name.in_(cleaned)).all()
     return [row[0] for row in rows]
 
 

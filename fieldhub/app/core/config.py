@@ -1,15 +1,26 @@
 """field hub settings loaded from FIELDHUB_* environment variables."""
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_JWT_SECRET = "fieldhub-dev-secret-change-me"
 
+# hosts that pilot on the lan can never reach - a device-facing address resolving
+# to one of these means public_host (or a per-service override) is still unset
+UNREACHABLE_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "minio", "emqx"})
+
 
 class Settings(BaseSettings):
     """field hub settings, all overridable via FIELDHUB_* env vars."""
+
+    # the laptop's lan ip/hostname on the travel router - no scheme, no port,
+    # e.g. "192.168.8.100". the single host every device-facing address (mqtt
+    # addr, sts endpoint, presigned urls) derives from. empty falls back to the
+    # per-service settings below (bare-metal dev where internal == device-facing).
+    public_host: str = ""
 
     # mqtt broker (emqx) probe target - mqtts listener
     mqtt_host: str = "localhost"
@@ -20,11 +31,6 @@ class Settings(BaseSettings):
 
     # minio bucket for the wayline library
     minio_wayline_bucket: str = "tarmacview-waylines"
-
-    # lan-reachable minio url for presigned download links handed to pilot -
-    # must be the laptop's lan ip, never a compose hostname. falls back to
-    # minio_endpoint when unset (bare-metal dev where both are the same).
-    minio_public_endpoint: str = ""
 
     # presigned download url lifetime in seconds
     presigned_url_expiry_s: int = 3600
@@ -37,9 +43,10 @@ class Settings(BaseSettings):
     minio_object_key_prefix: str = "media"
     minio_sts_expiry_s: int = 3600
 
-    # device-facing object-store endpoint handed to pilot in sts payloads -
-    # must be the laptop's lan ip, never a compose hostname. empty falls back
-    # to minio_endpoint (bare-metal dev, where both are the same address).
+    # explicit per-service override for the device-facing object-store endpoint
+    # (sts payloads + presigned download urls) - a full url like
+    # http://192.168.8.100:9000. prefer public_host; set this only when minio is
+    # reached on a different host/port than the api (e.g. a reverse proxy).
     minio_device_endpoint: str = ""
 
     # tarmacview backend base url for media-event reporting - empty disables
@@ -67,8 +74,10 @@ class Settings(BaseSettings):
     mqtt_tls_ca: Path = Path("/certs/ca.crt")
     mqtt_reconnect_delay_s: float = 5.0
 
-    # device-facing mqtt address handed to pilot at login - must be the
-    # laptop's lan ip, never a compose hostname. empty until provisioned.
+    # explicit per-service override for the device-facing broker address handed
+    # to pilot at login - a full url like ssl://192.168.8.100:8883. prefer
+    # public_host; set this only when the broker is reached on a different
+    # host/port than the derived one.
     mqtt_device_addr: str = ""
     mqtt_device_username: str = ""
     mqtt_device_password: str = ""
@@ -105,10 +114,50 @@ class Settings(BaseSettings):
         return value or DEFAULT_JWT_SECRET
 
     def device_mqtt_addr(self) -> str:
-        """device-facing broker address - configured value or the probe target."""
+        """device-facing broker address pilot dials.
+
+        precedence: explicit override, then public_host, then the probe target.
+        """
         if self.mqtt_device_addr:
             return self.mqtt_device_addr
-        return f"ssl://{self.mqtt_host}:{self.mqtt_port}"
+        host = self.public_host or self.mqtt_host
+        return f"ssl://{host}:{self.mqtt_port}"
+
+    def device_minio_endpoint(self) -> str:
+        """device-facing object-store url pilot dials - sts payloads + presigning.
+
+        precedence: explicit override, then public_host (scheme/port inherited
+        from minio_endpoint), then the internal endpoint.
+        """
+        if self.minio_device_endpoint:
+            return self.minio_device_endpoint
+        if self.public_host:
+            parts = urlsplit(self.minio_endpoint)
+            return f"{parts.scheme}://{self.public_host}:{parts.port or 9000}"
+        return self.minio_endpoint
+
+    def device_address_report(self) -> tuple[list[str], list[str]]:
+        """resolved device-facing addresses plus warnings for unreachable hosts.
+
+        returns (summary_lines, warnings) for the startup log - a warning means
+        the address resolves to a compose/loopback host pilot on the lan cannot
+        reach, so public_host (or an override) is still unset.
+        """
+        mqtt_addr = self.device_mqtt_addr()
+        minio_endpoint = self.device_minio_endpoint()
+        summary = [
+            f"public_host={self.public_host or '(unset)'}",
+            f"device mqtt_addr={mqtt_addr}",
+            f"device minio endpoint={minio_endpoint}",
+        ]
+        warnings = []
+        for label, addr in (("mqtt_addr", mqtt_addr), ("minio endpoint", minio_endpoint)):
+            if (urlsplit(addr).hostname or "") in UNREACHABLE_HOSTS:
+                warnings.append(
+                    f"device-facing {label} resolves to {addr!r} - pilot on the lan "
+                    "cannot reach this; set FIELDHUB_PUBLIC_HOST to the laptop's lan ip"
+                )
+        return summary, warnings
 
 
 settings = Settings()

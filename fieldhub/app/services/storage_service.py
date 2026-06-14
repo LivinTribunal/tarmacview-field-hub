@@ -97,7 +97,7 @@ def assume_role() -> Credentials:
 
 def device_endpoint() -> str:
     """device-facing object-store address for sts payloads."""
-    return settings.minio_device_endpoint or settings.minio_endpoint
+    return settings.device_minio_endpoint()
 
 
 def storage_config_payload() -> StsCredentialsData:
