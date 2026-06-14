@@ -2,7 +2,8 @@
 
 How the TarmacView app connects to the field hub across deployments, and the
 phased plan to build it. Companion to `docs/ROADMAP.md` (hardware/field
-validation) and the topology decision record `docs/adr/` (Phase 0 below).
+validation). Topology decision record:
+`docs/adr/2026-06-14-tarmacview-fieldhub-integration-topology.md`.
 
 ## Committed decision
 
@@ -35,12 +36,13 @@ drone-mission-planning-module · `[both]` = cross-repo seam.
 
 ---
 
-## Phase 0 — Settle the architecture (ADR) · `[hub]`
+## Phase 0 — Settle the architecture (ADR) · `[hub]` ✅ Done
 
-- **0.1 Topology ADR.** Record the three scenarios, the local-docker-first
-  decision, browser-bridge as Phase 3, the planning→field sync model, and *why
-  not* a cloud↔LAN tunnel. Extends the 2026-06-09 ADR's deployment section.
-- *Done-when:* ADR merged; this roadmap references it.
+- **0.1 Topology ADR.** ✅ Landed —
+  `docs/adr/2026-06-14-tarmacview-fieldhub-integration-topology.md`. Records the
+  three scenarios, local-docker-first, browser-bridge as Phase 3, the deferred
+  pre-trip sync, and *why not* a cloud↔LAN tunnel. Supersedes the 2026-06-09
+  ADR's deployment notes.
 
 ## Phase 1 — One-command offline field setup · `[both]` (hardware-day enabler)
 
@@ -82,13 +84,16 @@ drone-mission-planning-module · `[both]` = cross-repo seam.
 - *Done-when:* the hosted web app on a connected field site shows live hub
   status + dispatches to the local hub directly.
 
-## Cross-cutting — Planning → field mission sync · `[mono]` (scope in the ADR)
+## Deferred — Planning → field mission sync · `[mono]`
 
-If planning happens in the cloud and flying happens offline, missions must reach
-the local stack. Decided in Phase 0; sequenced after Phase 1.
+**Decided (ADR):** supported now are **both-local** (plan + fly in the local
+stack) and **both-online** (cloud app + a reachable hub). The mixed case — cloud
+app while only the hub is offline — needs **pre-trip pull sync** (the local stack
+pulls selected missions while still online). **Deferred** until office-planning-
+then-offline-flying is a real workflow; for offline work now, plan locally.
 
 ---
 
-**Order:** 0 → 1 → 2 → 3, with the sync cross-cut slotted once the ADR settles
-it. Phase 1 directly smooths hardware day. Native/desktop-wrapper packaging is
-out of scope (stay Docker; revisit a thin launcher only if operators need it).
+**Order:** 0 ✅ → 1 → 2 → 3; pre-trip sync deferred. Phase 1 directly smooths
+hardware day. Native/desktop-wrapper packaging is out of scope (stay Docker;
+revisit a thin launcher only if operators need it).
