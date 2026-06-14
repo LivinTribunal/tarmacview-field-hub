@@ -284,8 +284,15 @@ panel):
 1. `GET /pilot/config` → bootstrap above.
 2. `platformVerifyLicense(appId, appKey, appLicense)`, then
    `platformIsVerified()`.
-3. Operator login form → `POST /manage/api/v1/login` `{username, password,
-   flag: 2}` → `access_token`, `mqtt_*`, `workspace_id` (§3.1).
+3. Login - **resume or prompt**. The page caches `access_token` in
+   `localStorage`; on load, when a token is cached it tries `POST
+   /manage/api/v1/token/refresh` (`x-auth-token`: cached) first, gets a fresh
+   one, and skips the form ("resuming session"). A stale or expired token is
+   dropped and the operator login form shows as before → `POST
+   /manage/api/v1/login` `{username, password, flag: 2}`. Either path yields
+   `access_token`, `mqtt_*`, `workspace_id` (§3.1) and the page re-caches the
+   token. Refresh both validates and extends, so a webview reload (returning
+   from the route library) no longer forces a re-login.
 4. `platformLoadComponent("api", {host: <page origin>, token})`.
 5. `window.thingConnectCallback` registered (callbacks are global function
    *names* Pilot invokes), then `platformLoadComponent("thing", {host:
@@ -303,6 +310,13 @@ panel):
    sync. Empty params; the HTTP host + token come from the `api` module.
    **Required** — without it Pilot never queries `/wayline/...` and no cloud
    routes appear (see below).
+
+The form button reads **Connect**; after connect the page shows "Connected as
+&lt;username&gt;" next to a **Disconnect** button. Disconnect is a real
+teardown: the page unloads the loaded JSBridge components
+(`mission`/`media`/`thing`/`api`, reverse load order via
+`platformUnloadComponent`) so Pilot drops the cloud-platform link, then clears
+the cached token and returns to the connect form.
 
 Bridge return parsing (`parseBridgeReturn`): string returns are JSON
 `{code, message, data}` envelopes — `code: 0` = ok, `data` is sometimes a

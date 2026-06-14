@@ -328,8 +328,9 @@ for the sweep inside `GET /api/v1/drone-media` to retry.
   device topology + online status, wayline library, media management (STS,
   fast-upload, callbacks), and the webview connect page (`GET /` +
   `GET /pilot/config`) that bootstraps the JSBridge
-  `api`/`thing`/`media`/`mission` modules. Livestream and TSA map elements
-  are explicitly out of scope for v1.
+  `api`/`thing`/`media`/`mission` modules - with cached-session resume (skips
+  the login form on reload) and a disconnect teardown that unloads them.
+  Livestream and TSA map elements are explicitly out of scope for v1.
 - Persists its own small state (dispatch records, device registry) in the
   existing postgres instance, separate schema.
 
