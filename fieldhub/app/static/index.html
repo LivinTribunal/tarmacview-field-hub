@@ -48,6 +48,13 @@
     color: #ffffff;
   }
   button:disabled, input:disabled { opacity: 0.45; }
+  #switch-account {
+    background: transparent;
+    color: #93a1b3;
+    border: 1px solid #3a4757;
+    font-size: 18px;
+    margin: 0 0 24px;
+  }
   #status-panel { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
   #status-panel li {
     display: flex;
@@ -96,6 +103,8 @@
     <button id="login-button" type="submit" disabled>Log in</button>
   </form>
 
+  <button id="switch-account" type="button" hidden>Use a different account</button>
+
   <ul id="status-panel">
     <li id="status-license" data-state="pending">
       <span class="mark">&#9675;</span><span class="step">DJI license</span><span class="state">waiting</span>
@@ -131,6 +140,21 @@
   var passwordInput = document.getElementById("password");
   var loginButton = document.getElementById("login-button");
   var errorLine = document.getElementById("error-line");
+  var switchAccount = document.getElementById("switch-account");
+
+  // cache the access token so a webview reload (e.g. returning from the route
+  // library) resumes the session instead of forcing a re-login. lan-only
+  // surface, same posture as the token itself.
+  var TOKEN_KEY = "tarmacview.pilot.token";
+  function getCachedToken() {
+    try { return window.localStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+  }
+  function persistToken(token) {
+    try { window.localStorage.setItem(TOKEN_KEY, token); } catch (e) { /* storage off */ }
+  }
+  function clearToken() {
+    try { window.localStorage.removeItem(TOKEN_KEY); } catch (e) { /* storage off */ }
+  }
 
   var MARKS = { pending: "○", running: "…", waiting: "…", ok: "✓", error: "✗" };
 
@@ -161,7 +185,12 @@
     errorLine.textContent = "pilot-connect.js failed to load - reload the page";
     return;
   }
-  form.hidden = false;
+
+  // clear the cached token and start over with a fresh login
+  switchAccount.addEventListener("click", function () {
+    clearToken();
+    window.location.reload();
+  });
 
   // the first flow run waits here for the form submit; after a failed run the
   // next submit starts a fresh flow with the entered credentials
@@ -184,6 +213,7 @@
   function waitForCredentials() {
     return new Promise(function (resolve) {
       resolveCredentials = resolve;
+      form.hidden = false;
       setFormEnabled(true);
     });
   }
@@ -198,8 +228,16 @@
       getCredentials: credentials
         ? function () { return Promise.resolve(credentials); }
         : waitForCredentials,
+      getCachedToken: getCachedToken,
+      persistToken: persistToken,
+      clearToken: clearToken,
     }).then(function (result) {
-      if (!result.completed) setFormEnabled(true);
+      if (result.completed) {
+        form.hidden = true;
+        switchAccount.hidden = false;
+      } else {
+        setFormEnabled(true);
+      }
     });
   }
 

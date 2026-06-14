@@ -30,6 +30,9 @@ const LOGIN_DATA = {
   mqtt_password: "mqtt-pass",
 };
 
+// token/refresh returns the same shape with a fresh token (cached-session resume)
+const REFRESH_DATA = Object.assign({}, LOGIN_DATA, { access_token: "token-refreshed" });
+
 function makeBridge(events, calls, overrides) {
   const componentOverrides = (overrides && overrides.components) || {};
 
@@ -73,6 +76,7 @@ function makeFetch(events, fetches, envelopes) {
     fetches.push({
       url,
       method: httpMethod,
+      headers: (options && options.headers) || {},
       body: options && options.body ? JSON.parse(options.body) : null,
     });
     const envelope = envelopes[url];
@@ -124,6 +128,20 @@ async function run(scenario) {
     };
   }
 
+  // cached-session resume: a stored token, refreshed on load. "resume" succeeds;
+  // "resume-expired" has no refresh envelope so the token is dropped -> form.
+  const tokenStore = {
+    token: scenario === "resume" || scenario === "resume-expired" ? "cached-token" : null,
+  };
+  const tokenOps = [];
+  if (scenario === "resume") {
+    envelopes["/manage/api/v1/token/refresh"] = {
+      code: 0,
+      message: "success",
+      data: REFRESH_DATA,
+    };
+  }
+
   const bridge = scenario === "no-bridge" ? null : makeBridge(events, calls, overrides);
 
   const result = await connect.runConnectFlow({
@@ -138,6 +156,15 @@ async function run(scenario) {
       events.push("credentials");
       return { username: "pilot", password: "field-test-password" };
     },
+    getCachedToken: () => tokenStore.token,
+    persistToken: (token) => {
+      tokenStore.token = token;
+      tokenOps.push({ op: "persist", token });
+    },
+    clearToken: () => {
+      tokenStore.token = null;
+      tokenOps.push({ op: "clear" });
+    },
   });
 
   const report = {
@@ -148,6 +175,8 @@ async function run(scenario) {
     fetches,
     statuses,
     registeredCallbacks: Object.keys(registered),
+    tokenOps,
+    cachedToken: tokenStore.token,
   };
 
   // pilot invokes the registered global with connection state changes -
