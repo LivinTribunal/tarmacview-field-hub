@@ -429,6 +429,9 @@ is `docs/emulator-validation.md`.
 
 ## 10. References
 
+- Operational bring-up: `INSTALL.md` - install + connect guide, getting the
+  *Send to drone* panel off "not connected" (backend↔hub wiring, certs, RC
+  provisioning).
 - Protocol contract: `docs/specs/dji-cloud-api-reference.md` — endpoints,
   MQTT topics, payload shapes, device enums. Single source of truth for
   implementation work; pipeline agents have no web access, so start there
