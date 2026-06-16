@@ -7,7 +7,7 @@ pydantic==2.13.3
 pydantic-settings==2.14.0
 
 # Multipart form parsing - internal wayline register upload
-python-multipart==0.0.27
+python-multipart==0.0.31
 
 # HTTP client - object-store health probe
 httpx==0.28.1
